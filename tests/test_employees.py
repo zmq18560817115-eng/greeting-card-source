@@ -178,9 +178,20 @@ class EmployeeTests(unittest.TestCase):
         self.get_user.side_effect = RuntimeError("network unavailable")
         result = employees.verify_employee(eid)
         self.assertFalse(result["ok"])
-        self.assertEqual(self.get(eid)["identity_status"], "failed")
+        self.assertEqual(self.get(eid)["identity_status"], "unavailable")
         self.assertIsNone(self.get(eid)["identity_verified_at"])
         self.assert_invalidated(event_id, card_id)
+
+    def test_feishu_permission_failure_keeps_specific_reason(self):
+        eid = self.employee()
+        self.get_user.side_effect = feishu.FeishuError(99991672, "缺少用户读取权限")
+        result = employees.verify_employee(eid)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "user_unavailable")
+        self.assertIn("99991672", result["error"])
+        self.assertEqual(self.get(eid)["identity_status"], "unavailable")
+        self.list_scope.side_effect = feishu.FeishuError(99991672, "缺少通讯录权限")
+        self.assertIn("99991672", employees.match_employee(eid)["msg"])
 
     def test_failed_candidate_binding_preserves_old_open_id(self):
         eid = self.employee()
@@ -557,6 +568,43 @@ class EmployeeTests(unittest.TestCase):
         self.assertEqual(self.get(eid)["birth_date"], "1896-02-29")
         with self.assertRaises(employees.EmployeeError):
             employees.save_employee({"id": eid, "join_date": "02-29"})
+
+
+class DateParsingTests(unittest.TestCase):
+    def test_chinese_full_dates_and_existing_formats(self):
+        for raw, expected in (
+            ("2021年2月1日", "2021-02-01"),
+            ("2026年8月3日", "2026-08-03"),
+            (" 2024 年 2 月 29 日 ", "2024-02-29"),
+            ("2021年02月01日 00:00:00", "2021-02-01"),
+            ("2021-02-01", "2021-02-01"),
+            ("2021/2/1", "2021-02-01"),
+            ("2021.2.1", "2021-02-01"),
+            ("20210201", "2021-02-01"),
+        ):
+            for field in ("join_date", "birth_date"):
+                with self.subTest(raw=raw, field=field):
+                    self.assertEqual(employees._date(raw, field), expected)
+
+    def test_chinese_month_day_only_allowed_for_birthdays(self):
+        for raw, expected in (("2月1日", "1900-02-01"), ("2 月 29 日", "1896-02-29")):
+            with self.subTest(raw=raw):
+                self.assertEqual(employees._date(raw, "birth_date"), expected)
+                with self.assertRaises(employees.EmployeeError) as raised:
+                    employees._date(raw, "join_date")
+                self.assertEqual(raised.exception.code, "invalid_date")
+                self.assertIn("必须包含年份", str(raised.exception))
+
+    def test_chinese_dates_still_reject_impossible_or_malformed_dates(self):
+        for raw in ("2021年2月29日", "2024年2月30日", "2021年13月1日",
+                    "2021年0月1日", "2021年2月0日", "2021年2月1日其他",
+                    "2021年2月1日 25:00:00", "2月30日"):
+            for field, label in (("join_date", "入职日期"), ("birth_date", "生日")):
+                with self.subTest(raw=raw, field=field):
+                    with self.assertRaises(employees.EmployeeError) as raised:
+                        employees._date(raw, field)
+                    self.assertEqual(raised.exception.code, "invalid_date")
+                    self.assertIn(label, str(raised.exception))
 
 
 if __name__ == "__main__":

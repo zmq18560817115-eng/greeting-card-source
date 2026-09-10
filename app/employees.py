@@ -62,6 +62,15 @@ def _date(value, field):
     if isinstance(value, date):
         return value.isoformat()
     raw = str(value).strip().replace("/", "-").replace(".", "-")
+    chinese_date = re.fullmatch(
+        r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s+(\d{1,2}:\d{2}:\d{2}))?", raw)
+    if chinese_date:
+        year, month, day, clock = chinese_date.groups()
+        raw = f"{year}-{month}-{day}" + (f" {clock}" if clock else "")
+    elif field == "birth_date":
+        chinese_birthday = re.fullmatch(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", raw)
+        if chinese_birthday:
+            raw = "-".join(chinese_birthday.groups())
     formats = ["%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y%m%d"]
     for fmt in formats:
         try:
@@ -75,7 +84,11 @@ def _date(value, field):
             return datetime.strptime(year + "-" + raw, "%Y-%m-%d").date().isoformat()
         except ValueError:
             pass
-    raise EmployeeError(f"{field} 日期无效：{value}", "invalid_date")
+    label = {"join_date": "入职日期", "birth_date": "生日"}.get(field, field)
+    hint = "请填写有效日期，例如 2021-02-01 或 2021年2月1日"
+    if field == "join_date":
+        hint += "，入职日期必须包含年份"
+    raise EmployeeError(f"{label}无效：{value}；{hint}", "invalid_date")
 
 
 def _normalize(payload):
@@ -314,6 +327,8 @@ def resolve_departments(user):
     for department_id in dict.fromkeys(ids):
         try:
             department = feishu.get_department(department_id)
+        except feishu.FeishuError as exc:
+            raise IdentityError(f"无法读取飞书部门：{feishu.connection_error(exc)}", "department_unavailable") from exc
         except Exception as exc:
             raise IdentityError(f"无法读取飞书部门 {department_id}", "department_unavailable") from exc
         if (not isinstance(department, Mapping)
@@ -348,8 +363,10 @@ def _validate_identity(emp):
         fail("缺少完整部门名称", "missing_departments")
     try:
         user = feishu.get_user(open_id)
+    except feishu.FeishuError as exc:
+        raise IdentityError(feishu.connection_error(exc), "user_unavailable", evidence) from exc
     except Exception as exc:
-        raise IdentityError("无法实时读取飞书用户，请检查权限并重试", "user_unavailable", evidence) from exc
+        raise IdentityError(feishu.connection_error(exc), "user_unavailable", evidence) from exc
     if not isinstance(user, Mapping):
         fail("飞书用户响应格式无效", "invalid_user")
     evidence["remote"] = {"open_id": user.get("open_id"), "name": user.get("name")}
@@ -416,7 +433,8 @@ def verify_employee(employee_id, open_id=None):
             except EmployeeError as exc:
                 failure = IdentityError(str(exc), exc.code, evidence)
         if failure is not None:
-            _reset_identity(conn, employee_id, str(failure), "failed", evidence)
+            status = "unavailable" if failure.code in ("user_unavailable", "department_unavailable") else "failed"
+            _reset_identity(conn, employee_id, str(failure), status, evidence)
             _invalidate_events(conn, employee_id, "身份核验失败：" + str(failure), deactivate=not current["active"])
             return {"ok": False, "id": employee_id, "open_id": original.get("feishu_open_id"),
                     "code": failure.code, "error": str(failure), "evidence": evidence}
@@ -438,7 +456,8 @@ def match_employee(employee_id):
     try:
         users = feishu.list_scope_users()
     except Exception as exc:
-        return {"ok": False, "candidates": [], "errors": ["无法读取飞书授权范围"], "ambiguous": False}
+        reason = feishu.connection_error(exc)
+        return {"ok": False, "candidates": [], "errors": [reason], "msg": reason, "ambiguous": False}
     candidates, seen = [], set()
     for user in users:
         if not isinstance(user, Mapping) or user.get("name") != emp["name"]:

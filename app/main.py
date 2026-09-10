@@ -11,7 +11,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import compose, employees, feishu, pipeline, push, scheduler, sync, templates
+from . import compose, employees, feishu, feishu_config, pipeline, push, scheduler, sync, templates
 from .dates import next_cycle, parse_date, this_cycle
 from .db import init_db, now, query, query_one, tx
 from .settings import ADMIN_TOKEN, BASE_DIR, DRY_RUN, OUTPUT_DIR
@@ -292,6 +292,21 @@ def gen_task(task_id: str, _=Depends(auth)):
 def do_scan(scope: str = Body("next", embed=True), _=Depends(auth)):
     created, start, end = pipeline.scan_cycle(cycle=_cycle(scope))
     return {"created": created, "cycle_start": start.isoformat(), "cycle_end": end.isoformat()}
+
+
+@app.get("/api/feishu/config")
+def get_feishu_config(_=Depends(auth)):
+    return feishu_config.public_config()
+
+
+@app.post("/api/feishu/config")
+def save_feishu_config(payload: dict = Body(...), _=Depends(auth)):
+    return feishu_config.save_config(payload.get("app_id"), payload.get("app_secret", ""))
+
+
+@app.post("/api/feishu/check")
+def check_feishu_connection(_=Depends(auth)):
+    return feishu_config.check_connection()
 
 
 @app.get("/api/health")

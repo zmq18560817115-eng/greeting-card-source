@@ -28,13 +28,13 @@
   <div id="events"><div class="empty">正在加载海报…</div></div>
 </section>
 <section id="tab-staff" hidden>
-  <div class="page-head"><div><h2>员工资料</h2><p>统一维护员工名单，通过姓名、部门和飞书 ID 核验收件人。</p></div><div class="page-head-actions"><button id="sync-employees">从飞书同步</button><button id="add-employee" class="primary">＋ 新增员工</button></div></div>
+  <div class="page-head"><div><h2>员工资料</h2><p>核验时实时查询飞书，核对姓名、完整部门和当前应用的 open_id。</p></div><div class="page-head-actions"><button id="open-feishu-settings">飞书连接</button><button id="sync-employees">从飞书同步</button><button id="add-employee" class="primary">＋ 新增员工</button></div></div>
   <details class="import-panel"><summary>导入员工名单 <span class="meta">· CSV / XLSX</span></summary><div class="import-content"><label class="field">选择名单文件<input type="file" id="csv" accept=".csv,.xlsx"></label><button id="download-template">下载导入模板</button><button id="import-employees" class="primary">开始导入</button><span class="meta">按行显示新增、更新和错误结果。</span></div></details>
   <div class="filter-bar" aria-label="筛选员工">
     <input id="kw" type="search" placeholder="搜索姓名、工号或飞书 ID" aria-label="搜索员工">
     <select id="staff-filter" aria-label="在职状态"><option value="active">在职员工</option><option value="all">全部员工</option><option value="inactive">已离职 / 停用</option></select>
     <select id="staff-department" aria-label="员工部门"><option value="">全部部门</option></select>
-    <select id="staff-identity" aria-label="身份核验状态"><option value="">全部核验状态</option><option value="verified">核验通过</option><option value="pending">待核验</option><option value="failed">核验失败</option></select>
+    <select id="staff-identity" aria-label="身份核验状态"><option value="">全部核验状态</option><option value="verified">核验通过</option><option value="pending">待核验</option><option value="unavailable">暂无法核验</option><option value="failed">核验失败</option></select>
   </div>
   <div id="staff-reports" class="reports" aria-live="polite"></div>
   <div class="batch-bar"><b id="selected-count">已选 0 人</b><button id="verify-selected" disabled>三重核验</button><button id="disable-selected" class="danger" disabled>批量离职 / 停用</button><button id="clear-selection" disabled>清空选择</button><span class="spacer"></span><span id="staff-count" class="meta">0 条记录</span></div>
@@ -57,7 +57,21 @@
     </aside>
   </div></fieldset>
 </section>
-<section id="tab-sys" hidden><div class="page-head"><div><h2>系统状态</h2><p>查看运行模式、飞书连接及任务状态。</p></div><span class="spacer"></span><button id="check-health">重新检查</button></div><div class="panel"><div class="bar" style="margin-bottom:18px"><label class="meta">管理口令 <input id="token" class="token" type="password" placeholder="未设可留空" autocomplete="off"></label><span class="meta">填写后刷新对应页面。</span></div><p id="run-mode" class="hint">尚未检查</p><pre id="health"></pre></div></section>
+<section id="tab-sys" hidden>
+  <div class="page-head"><div><h2>系统状态</h2><p>查看运行模式、飞书连接及任务状态。</p></div><span class="spacer"></span><button id="check-health">重新检查</button></div>
+  <div class="bar" style="margin-bottom:18px"><label class="meta">管理口令 <input id="token" class="token" type="password" placeholder="未设可留空" autocomplete="off"></label><span class="meta">填写后刷新对应页面。</span></div>
+  <div id="sys-reports" class="reports" aria-live="polite"></div>
+  <form id="feishu-config-form" class="feishu-settings">
+    <h3>飞书连接</h3><p id="feishu-connection-state" class="hint" role="status">尚未检查</p>
+    <fieldset id="feishu-config-fields"><div class="grid">
+      <label class="field">App ID<input id="feishu-app-id" type="text" placeholder="cli_ 开头的应用 ID" autocomplete="off" required></label>
+      <label class="field">App Secret<input id="feishu-app-secret" type="password" placeholder="填写应用密钥" autocomplete="new-password"></label>
+    </div><div class="bar" style="margin-top:14px"><button type="submit" class="primary">保存连接配置</button><button type="button" id="test-feishu-connection">检查通讯录连接</button><a href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer">创建 / 管理飞书应用 ↗</a></div></fieldset>
+    <p class="hint">密钥只保存在本机，不回显。已保存时留空表示保留；保存后立即生效。连接检查读取通讯录，不发送消息。</p>
+    <details class="feishu-setup-help"><summary>还没有应用？查看接入步骤</summary><ol><li>用公司飞书账号登录开放平台，创建企业自建应用“员工贺卡助手”，添加机器人能力。</li><li>开通通讯录用户与部门读取权限，将通讯录权限范围覆盖需要导入的员工，发布版本并完成企业审核。</li><li>在“凭证与基础信息”复制 App ID 和 App Secret 到上方，保存后检查连接。</li></ol><p class="hint">连接成功后，在员工资料页同步名单并核验。open_id 随应用变化，请使用当前应用读取的 ID；生日、入职日期缺失时可从名单补全。</p></details>
+  </form>
+  <div class="panel"><p id="run-mode" class="hint">尚未检查</p><details><summary>运行详情</summary><pre id="health"></pre></details></div>
+</section>
 </main>
 
 
@@ -68,6 +82,6 @@
 <dialog id="candidate-dialog" aria-labelledby="candidate-title"><div class="dialog-head"><h3 id="candidate-title">核对飞书候选人</h3><span class="spacer"></span><button data-close="candidate-dialog">关闭</button></div><div class="dialog-body"><p id="candidate-employee" class="details-line"></p><p class="hint" style="margin-top:10px">候选匹配不等于已绑定。只有符合条件的候选人可选；选择后仍由服务端严格核验姓名、部门和飞书 ID。</p><p id="candidate-message" class="error" role="alert"></p><div id="candidates"></div></div></dialog>
 <dialog id="zoom-dialog" aria-label="海报大图"><div class="bar" style="padding:10px 14px"><span class="meta">海报大图</span><span class="spacer"></span><button data-close="zoom-dialog">关闭</button></div><img id="zoom-img" alt="海报完整预览"></dialog>
 <div id="toast" role="status" hidden></div>
-<dialog id="event-detail-dialog"><div class="dialog-head"><h3>海报详情</h3><span class="spacer"></span><button data-close="event-detail-dialog">关闭</button></div><div id="event-detail" class="dialog-body"></div></dialog>
+<dialog id="event-detail-dialog" aria-labelledby="event-detail-title"><div class="dialog-head"><h3 id="event-detail-title">贺卡核查</h3><span class="spacer"></span><button data-close="event-detail-dialog">关闭</button></div><div id="event-detail" class="dialog-body"></div></dialog>
 </body>
 </html>

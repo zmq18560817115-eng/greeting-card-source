@@ -50,7 +50,7 @@ def _check(resp):
 
 def tenant_access_token(force=False):
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
-        raise FeishuError(-1, "尚未在.env配置飞书应用凭据")
+        raise FeishuError(-1, "尚未连接飞书，请到「系统状态 → 飞书连接」填写 App ID 和 App Secret")
     with _lock:
         if not force and _token["value"] and time.time() < _token["expire_at"]:
             return _token["value"]
@@ -71,6 +71,21 @@ def _headers(json_ct=True):
     if json_ct:
         h["Content-Type"] = "application/json; charset=utf-8"
     return h
+
+
+def connection_error(exc):
+    """Explain remote failures without exposing tokens, request bodies or credentials."""
+    if isinstance(exc, FeishuError):
+        message = str(exc)
+        for secret in (FEISHU_APP_SECRET, _token.get("value")):
+            if secret:
+                message = message.replace(secret, "[已隐藏]")
+        return message[:800]
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "连接飞书超时，请检查网络后重试"
+    if isinstance(exc, requests.exceptions.RequestException):
+        return "无法连接飞书，请检查网络和代理设置后重试"
+    return "飞书响应处理失败，请检查应用权限和服务日志"
 
 
 def _get(path, params=None, retry=1):

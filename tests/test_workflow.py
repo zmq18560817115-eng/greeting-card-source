@@ -220,16 +220,37 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(data["errors"][0]["row"], 3)
         self.assertEqual(db.query_one("SELECT birth_date FROM employees WHERE id=?", (self.emp["id"],))["birth_date"], "1995-09-10")
 
+    def test_csv_chinese_dates_import_and_invalid_row_remains_rejected(self):
+        raw = ("姓名,工号,部门,入职日期,生日\n"
+               "测试员工,E001,市场中心,2021年2月1日,1995年9月10日\n"
+               "日期导入测试,E_DATE,研发中心,2026年8月3日,2月29日\n"
+               "无效日期测试,E_INVALID,研发中心,2021年2月29日,1990年1月1日\n")
+        for encoding, added, updated in (("utf-8-sig", 1, 1), ("gb18030", 0, 2)):
+            with self.subTest(encoding=encoding):
+                response = self.client.post("/api/employees/import",
+                    files={"file": ("staff.csv", raw.encode(encoding), "text/csv")})
+                self.assertEqual(response.status_code, 200, response.text)
+                result = response.json()
+                self.assertEqual((result["total"], result["added"], result["updated"]), (3, added, updated))
+                self.assertEqual(len(result["errors"]), 1)
+                self.assertEqual((result["errors"][0]["row"], result["errors"][0]["code"]), (4, "invalid_date"))
+                self.assertIn("入职日期", result["errors"][0]["error"])
+                self.assertEqual(db.query_one("SELECT COUNT(*) AS n FROM employees")["n"], 2)
+                saved = db.query_one("SELECT * FROM employees WHERE employee_no='E_DATE'")
+                self.assertEqual((saved["join_date"], saved["birth_date"]), ("2026-08-03", "1896-02-29"))
+                self.assertEqual(db.query_one("SELECT join_date FROM employees WHERE id=?", (self.emp["id"],))["join_date"], "2021-02-01")
+
     def test_xlsx_and_duplicate_headers(self):
         import openpyxl
         workbook = openpyxl.Workbook()
-        workbook.active.append(["姓名", "工号", "部门", "生日"])
-        workbook.active.append(["新员工", "E009", "研发中心", date(1990, 2, 1)])
+        workbook.active.append(["姓名", "工号", "部门", "生日", "入职日期"])
+        workbook.active.append(["新员工", "E009", "研发中心", date(1990, 2, 1), "2021年2月1日"])
         raw = io.BytesIO()
         workbook.save(raw)
         response = self.client.post("/api/employees/import", files={"file": ("staff.xlsx", raw.getvalue())})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["added"], 1)
+        self.assertEqual(db.query_one("SELECT join_date FROM employees WHERE employee_no='E009'")["join_date"], "2021-02-01")
         response = self.client.post("/api/employees/import", files={"file": ("staff.csv", "姓名,name\n甲,乙".encode())})
         self.assertEqual(response.status_code, 400)
 

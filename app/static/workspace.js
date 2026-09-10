@@ -8,18 +8,30 @@ const sameId = (a,b) => a != null && b != null && String(a) === String(b);
 const isActive = e => e?.active === true || e?.active === 1 || e?.active === '1';
 const openId = e => e?.feishu_open_id || e?.open_id || '';
 const STATUS = Object.freeze({generating:'生成中',ready:'待确认',confirmed:'已确认待推送',pushing:'推送中',pushed:'已推送',failed:'推送失败',gen_failed:'生成失败',skipped:'已跳过',blocked:'核验阻止',simulated:'演练完成',needs_regeneration:'资料变更，需重新生成',delivery_unknown:'发送回执不明',expired:'日期已过期，停止发送'});
-const IDENTITY = Object.freeze({pending:'待核验',verified:'核验通过',failed:'核验失败'});
+const IDENTITY = Object.freeze({pending:'待核验',verified:'核验通过',failed:'核验失败',unavailable:'暂无法核验'});
 const own = (object,key) => Object.prototype.hasOwnProperty.call(object,key);
 const labelFor = (map,key) => own(map,key) ? map[key] : String(key || '未知');
 function badge(status, labels=STATUS){return `<span class="badge b-${own(labels,status)?esc(status):'unknown'}">${esc(labelFor(labels,status))}</span>`;}
 function message(value){return typeof value === 'string' ? value : JSON.stringify(value ?? '未知错误');}
 function toast(msg){$('#toast').textContent=msg;$('#toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').hidden=true,4500);}
 function report(area,title,rows=[],hasError=false){
-  const details=document.createElement('details');details.className='report'+(hasError?' has-error':'');details.open=true;
+  const box=$('#'+area+'-reports');
+  let toolbar=box.querySelector('.reports-toolbar');
+  if(!toolbar){
+    toolbar=document.createElement('div');toolbar.className='reports-toolbar';
+    const label=document.createElement('span');label.className='meta';label.textContent='操作提醒 · 最多保留最近 5 条';
+    const clear=document.createElement('button');clear.type='button';clear.textContent='清空提醒';clear.onclick=()=>box.replaceChildren();
+    toolbar.append(label,clear);box.append(toolbar);
+  }
+  const card=document.createElement('div');card.className='report'+(hasError?' has-error':'');
+  const details=document.createElement('details');details.open=true;
   const summary=document.createElement('summary');summary.textContent=title+' ';
   const time=document.createElement('time');time.textContent=new Date().toLocaleTimeString('zh-CN');summary.append(time);details.append(summary);
   const list=document.createElement('ul');for(const row of rows){const li=document.createElement('li');li.textContent=message(row);list.append(li);}details.append(list);
-  const box=$('#'+area+'-reports');for(const item of box.children)item.open=false;box.prepend(details);
+  const close=document.createElement('button');close.type='button';close.className='report-close';close.textContent='关闭';close.setAttribute('aria-label','关闭提醒：'+title);
+  close.onclick=()=>{card.remove();if(!box.querySelector('.report'))box.replaceChildren();};
+  card.append(details,close);for(const item of box.querySelectorAll('details'))item.open=false;toolbar.after(card);
+  for(const item of [...box.querySelectorAll('.report')].slice(5))item.remove();
 }
 async function api(path, options={}){
   const headers=new Headers(options.headers||{});headers.set('X-Admin-Token',$('#token').value);
@@ -45,7 +57,7 @@ function updateBusy(){
   for(const id of ['add-employee','import-employees','download-template','sync-employees','kw','staff-filter'])$('#'+id).disabled=BUSY.has('staff');
   $('#employee-fields').disabled=BUSY.has('staff');
   for(const b of document.querySelectorAll('#staff button,#staff input,#candidates button'))b.disabled=BUSY.has('staff') || b.dataset.locked==='true';
-  for(const b of document.querySelectorAll('#events button[data-action]'))b.disabled=BUSY.has('events') || b.dataset.locked==='true';
+  for(const b of document.querySelectorAll('#events button[data-action],#event-detail button[data-action]'))b.disabled=BUSY.has('events') || b.dataset.locked==='true';
   $('#tpl-work').disabled=!DRAFT || BUSY.has('tpl');$('#preview-tpl').disabled=BUSY.has('preview') || !DRAFT;
   updateSelection();updateEventSelection();
 }
@@ -67,7 +79,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=async()=>{
   TAB=b.dataset.tab;for(const t of ['events','staff','tpl','sys'])$('#tab-'+t).hidden=t!==TAB;
   document.querySelectorAll('nav button').forEach(n=>{if(n===b)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current');});await refresh();
 });
-async function refresh(){if(TAB==='events')await loadEvents();if(TAB==='staff')await loadStaff();if(TAB==='tpl')await loadTpl();if(TAB==='sys')await loadHealth();}
+async function refresh(){if(TAB==='events')await loadEvents();if(TAB==='staff')await loadStaff();if(TAB==='tpl')await loadTpl();if(TAB==='sys'){await loadFeishuConfig();await loadHealth();}}
 $('#refresh').onclick=refresh;
 
 // Event actions re-read state immediately before posting. Terminal deliveries remain read-only.
@@ -87,10 +99,13 @@ function canSelect(e){return ['ready','confirmed','failed','blocked','simulated'
 function eventButton(action,id,text,enabled,primary=false){return `<button data-action="${action}" data-id="${esc(id)}" data-locked="${!enabled}" ${enabled?'':'disabled'} class="${primary?'primary':''}">${text}</button>`;}
 function renderEventDetails(e){
   const emp=e.employee||{},reason=identityProblem(emp),cards=Array.isArray(e.cards)?e.cards:[];
-  const images=cards.map((c,i)=>{
+  const preview=selectedCard(e)||cards.find(c=>c.status==='ok'&&fileURL(c.url));
+  const selected=preview&&sameId(preview.id,e.selected_card_id);
+  const choose=c=>canSelect(e)?`<button class="select-card" data-action="select" data-id="${esc(e.id)}" data-card="${esc(c.id)}" data-locked="${sameId(c.id,e.selected_card_id)}" ${sameId(c.id,e.selected_card_id)?'disabled':''}>${sameId(c.id,e.selected_card_id)?'已选中':'选用'}</button>`:'';
+  const options=cards.map((c,i)=>{
     const url=fileURL(c.url),chosen=sameId(c.id,e.selected_card_id);
-    if(c.status==='ok'&&url)return `<div class="thumb ${chosen?'sel':''}"><button class="image-button" data-zoom="${esc(url)}" aria-label="放大${esc(emp.name)}的海报"><img src="${esc(url)}" alt="${esc(emp.name)}的海报" loading="lazy"></button><span class="meta">${cards.length===1?'海报':'方案 '+(i+1)} · ${chosen?'已选中':'未选中'}</span>${canSelect(e)?`<button class="select-card" data-action="select" data-id="${esc(e.id)}" data-card="${esc(c.id)}" data-locked="${chosen}" ${chosen?'disabled':''}>${chosen?'已选为推送图片':'选择此海报'}</button>`:''}</div>`;
-    return `<div class="thumb"><div class="empty">${c.status==='generating'?'海报生成中…':'图片不可用'}</div><p class="error">${esc(c.error||(c.status==='ok'?'图片地址无效':''))}</p></div>`;
+    if(c.status==='ok'&&url)return `<div class="poster-option ${chosen?'is-selected':''}"><button class="image-button" data-zoom="${esc(url)}" aria-label="放大方案 ${i+1}"><img src="${esc(url)}" alt="方案 ${i+1}" loading="lazy"></button><span>方案 ${i+1}${chosen?'<small>已选中</small>':''}</span>${chosen?'':choose(c)}</div>`;
+    return `<div class="poster-option unavailable"><span>方案 ${i+1} · ${c.status==='generating'?'生成中':'不可用'}<small>${esc(c.error||'')}</small></span></div>`;
   }).join('');
   let instruction='';
   if(e.status==='delivery_unknown')instruction='发送请求已发出，但回执不明。请到飞书核实员工是否已收到消息；禁止重推、选图和重新生成。';
@@ -103,9 +118,21 @@ function renderEventDetails(e){
   else if(e.status==='gen_failed')instruction='生成失败，可查看错误原因后重新生成。';
   else if(e.status==='generating')instruction='正在生成，页面将自动更新。';
   else if(['confirmed','failed'].includes(e.status))instruction=reason||(selectedCard(e)?'已确认收件人与海报，可立即推送。':'选定图片不可用，请重新生成并审核。');
-  return `<article class="ev"><div class="ev-head"><span class="name">${esc(emp.name||'员工资料不可用')}</span><span class="badge">${esc(e.event_type==='birthday'?'生日':e.event_type==='anniversary'?'入职周年':e.event_type)}</span>${badge(e.status)}<span class="spacer"></span><span class="meta">${esc(e.event_date)}${e.years!=null?' · '+esc(e.years)+(e.event_type==='birthday'?' 岁':' 周年'):''}</span></div>
-    <div class="identity"><span>部门：${esc(emp.department||'未填写')}</span><span>飞书 ID：${esc(openId(emp)||'未填写')}</span>${badge(emp.identity_status||'pending',IDENTITY)}</div>
-    <div class="event-body"><div class="cards">${images||'<div class="empty">尚无可用海报</div>'}</div><div class="event-info"><p class="meta">计划推送：${esc(e.trigger_at||'未排期')}${e.pushed_at?' · 已推送：'+esc(e.pushed_at):''}</p><p class="hint" style="margin-top:10px">${esc(instruction||'可查看海报和推送记录。')}</p>${e.last_error?`<p class="error">最近错误：${esc(e.last_error)}</p>`:''}<div class="acts">${eventButton('confirm',e.id,'确认发送排期',canConfirm(e),true)}${eventButton('push',e.id,e.status==='failed'?'重试推送':'立即推送',canPush(e))}${eventButton('regenerate',e.id,'重新生成 1 张',canRegen(e))}${eventButton('skip',e.id,'跳过本次',canSkip(e))}${eventButton('logs',e.id,'推送记录',true)}</div><p class="meta" style="margin-top:8px">已尝试推送 ${esc(e.push_attempts||0)} 次</p></div></div><div data-log-id="${esc(e.id)}">${EVENT_LOGS.has(String(e.id))?'<pre>'+esc(EVENT_LOGS.get(String(e.id)))+'</pre>':''}</div></article>`;
+  const actions=terminal(e)?'':eventButton('confirm',e.id,'确认发送排期',canConfirm(e),true)+eventButton('push',e.id,e.status==='failed'?'重试推送':'立即推送',canPush(e))+eventButton('regenerate',e.id,'重新生成',canRegen(e))+eventButton('skip',e.id,'跳过本次',canSkip(e));
+  return `<article class="event-review">
+    <div class="review-heading"><strong>${esc(emp.name||'员工资料不可用')}</strong><span class="badge">${esc(e.event_type==='birthday'?'生日':e.event_type==='anniversary'?'入职周年':e.event_type)}</span>${badge(e.status)}<span class="meta">${esc(e.event_date)}${e.years!=null?' · '+esc(e.years)+(e.event_type==='birthday'?' 岁':' 周年'):''}</span></div>
+    <div class="review-layout"><div class="review-information">
+      <dl class="review-facts"><div><dt>部门</dt><dd>${esc(emp.department||'未填写')}</dd></div><div><dt>身份核验</dt><dd>${badge(emp.identity_status||'pending',IDENTITY)}</dd></div><div class="full"><dt>飞书 ID</dt><dd class="review-open-id">${esc(openId(emp)||'未填写')}</dd></div><div><dt>计划推送</dt><dd>${esc(e.trigger_at||'未排期')}</dd></div><div><dt>${e.pushed_at?'实际推送':'推送次数'}</dt><dd>${e.pushed_at?esc(e.pushed_at):esc(e.push_attempts||0)+' 次'}</dd></div></dl>
+      <p class="review-instruction">${esc(instruction||'可查看海报和推送记录。')}</p>
+      ${emp.identity_error?`<p class="error">核验说明：${esc(emp.identity_error)}</p>`:''}
+      ${e.last_error?`<details class="review-error"><summary>查看最近错误</summary><p class="error">${esc(e.last_error)}</p></details>`:''}
+    </div><aside class="review-posters"><p class="meta">${preview?(selected?'已选海报':'待选择海报'):'海报预览'}</p>
+      ${preview?`<button class="review-preview" data-zoom="${esc(fileURL(preview.url))}" aria-label="查看${esc(emp.name||'')}海报大图"><img src="${esc(fileURL(preview.url))}" alt="${esc(emp.name||'')}海报缩略图"><span>点击查看大图 ↗</span></button>${cards.length===1?choose(preview):''}`:'<p class="review-no-poster">尚无可用海报</p>'}
+      ${cards.length>1||(!preview&&cards.length)?`<details class="poster-options"><summary>全部方案（${cards.length}）</summary><div>${options}</div></details>`:''}
+    </aside></div>
+    <div class="review-actions">${actions}${eventButton('logs',e.id,EVENT_LOGS.has(String(e.id))?'收起推送记录':'推送记录',true)}</div>
+    <div class="review-logs" data-log-id="${esc(e.id)}">${EVENT_LOGS.has(String(e.id))?'<pre>'+esc(EVENT_LOGS.get(String(e.id)))+'</pre>':''}</div>
+  </article>`;
 }
 async function loadEvents(quiet=false){
   const seq=++eventLoad;eventLoading=true;$('#events-loading').textContent='正在刷新…';
@@ -246,7 +273,7 @@ function renderStaff(){
   STAFF=ALL_STAFF.filter(e=>(state==='all'||(state==='active'?isActive(e):!isActive(e)))&&(!dept||e.department===dept)&&(!identity||e.identity_status===identity)&&(!keyword||[e.name,e.employee_no,e.department,e.email,openId(e)].some(v=>String(v||'').toLowerCase().includes(keyword))));
   STAFF_SELECTED=new Set([...STAFF_SELECTED].filter(id=>STAFF.some(e=>sameId(e.id,id))));
   $('#staff-count').textContent=STAFF.length+' 条记录';
-  $('#staff').innerHTML='<div class="table-wrap"><table class="data-table"><thead><tr><th class="check-col"><input type="checkbox" id="staff-all" aria-label="选择当前筛选的全部员工"></th><th>姓名</th><th>工号</th><th>部门</th><th>入职日期</th><th>生日</th><th>飞书 ID</th><th>身份核验</th><th>在职状态</th><th>操作</th></tr></thead><tbody>'+STAFF.map((e,i)=>`<tr class="${STAFF_SELECTED.has(String(e.id))?'is-selected':''}"><td><input type="checkbox" data-employee-check="${esc(e.id)}" aria-label="选择${esc(e.name)}" ${STAFF_SELECTED.has(String(e.id))?'checked':''}></td><td><button class="person-link" data-staff-action="edit" data-id="${esc(e.id)}"><span class="avatar tone-${i%4}">${esc(String(e.name||'?').slice(-1))}</span>${esc(e.name)}</button></td><td class="muted">${esc(e.employee_no||'—')}</td><td>${esc(e.department||'—')}</td><td>${esc(e.join_date||'—')}</td><td>${esc(e.birth_date||'—')}</td><td class="id-cell" title="${esc(openId(e))}">${esc(openId(e)||'未绑定')}</td><td title="${esc(e.identity_error||'')}">${badge(e.identity_status||'pending',IDENTITY)}</td><td><span class="status-dot ${isActive(e)?'active':''}"></span>${isActive(e)?'在职':'已停用'}</td><td class="row-actions"><button data-staff-action="edit" data-id="${esc(e.id)}">编辑</button>${isActive(e)?`<button data-staff-action="verify" data-id="${esc(e.id)}">核验</button><button data-staff-action="match" data-id="${esc(e.id)}">绑定</button>`:`<button data-staff-action="restore" data-id="${esc(e.id)}">恢复</button>`}</td></tr>`).join('')+(STAFF.length?'':'<tr><td colspan="10" class="empty">暂无员工，请新增或导入真实员工名单</td></tr>')+'</tbody></table></div>';
+  $('#staff').innerHTML='<div class="table-wrap"><table class="data-table"><thead><tr><th class="check-col"><input type="checkbox" id="staff-all" aria-label="选择当前筛选的全部员工"></th><th>姓名</th><th>工号</th><th>部门</th><th>入职日期</th><th>生日</th><th>飞书 ID</th><th>身份核验</th><th>在职状态</th><th>操作</th></tr></thead><tbody>'+STAFF.map((e,i)=>`<tr class="${STAFF_SELECTED.has(String(e.id))?'is-selected':''}"><td><input type="checkbox" data-employee-check="${esc(e.id)}" aria-label="选择${esc(e.name)}" ${STAFF_SELECTED.has(String(e.id))?'checked':''}></td><td><button class="person-link" data-staff-action="edit" data-id="${esc(e.id)}"><span class="avatar tone-${i%4}">${esc(String(e.name||'?').slice(-1))}</span>${esc(e.name)}</button></td><td class="muted">${esc(e.employee_no||'—')}</td><td>${esc(e.department||'—')}</td><td>${esc(e.join_date||'—')}</td><td>${esc(e.birth_date||'—')}</td><td class="id-cell" title="${esc(openId(e))}">${esc(openId(e)||'未绑定')}</td><td title="${esc(e.identity_error||'')}">${badge(e.identity_status||'pending',IDENTITY)}${e.identity_error?`<span class="identity-reason">${esc(e.identity_error)}</span>`:''}</td><td><span class="status-dot ${isActive(e)?'active':''}"></span>${isActive(e)?'在职':'已停用'}</td><td class="row-actions"><button data-staff-action="edit" data-id="${esc(e.id)}">编辑</button>${isActive(e)?`<button data-staff-action="verify" data-id="${esc(e.id)}">核验</button><button data-staff-action="match" data-id="${esc(e.id)}">绑定</button>`:`<button data-staff-action="restore" data-id="${esc(e.id)}">恢复</button>`}</td></tr>`).join('')+(STAFF.length?'':'<tr><td colspan="10" class="empty">暂无员工，请新增或导入真实员工名单</td></tr>')+'</tbody></table></div>';
   updateBusy();
 }
 async function loadStaff(){
@@ -276,8 +303,8 @@ async function verifyEmployees(list){
     try{const result=requireOK(await post('/api/employees/verify',{ids:batch.map(e=>e.id)}));if(!Array.isArray(result.results))throw new Error('核验接口未返回 results，无法确认核验结果');r.results.push(...result.results);}
     catch(error){r.results.push(...batch.map(e=>({id:e.id,ok:false,msg:error.message})));}
   }
-  let success=0;const details=active.map(e=>{const result=r.results.find(x=>sameId(x.id,e.id)),ok=result?.ok===true;if(ok)success++;return `${e.name} ｜ ${e.department||'未填部门'} ｜ ${openId(e)||'未填飞书 ID'}：${ok?'通过':'失败'}，${result?.msg || (result?'未提供说明':'接口未返回该员工的结果')}`;});
-  report('staff',`三重核验：通过 ${success}，失败 ${active.length-success}`,details,success!==active.length);await loadStaff();invalidatePreviewEmployees();
+  let success=0,unavailable=0;const details=active.map(e=>{const result=r.results.find(x=>sameId(x.id,e.id)),ok=result?.ok===true;if(ok)success++;const blocked=['user_unavailable','department_unavailable'].includes(result?.code);if(blocked)unavailable++;return `${e.name} ｜ ${e.department||'未填部门'} ｜ ${openId(e)||'未填飞书 ID'}：${ok?'通过':blocked?'暂无法核验':'失败'}，${result?.msg || (result?'未提供说明':'接口未返回该员工的结果')}`;});
+  report('staff',`飞书实时核验：通过 ${success}，暂无法核验 ${unavailable}，失败 ${active.length-success-unavailable}`,details,success!==active.length);await loadStaff();invalidatePreviewEmployees();
 }
 async function disableEmployees(list){
   const active=list.filter(isActive);if(!active.length)throw new Error('请选择在职员工');
@@ -306,7 +333,7 @@ function showCandidates(emp,result){
 }
 async function matchFeishu(emp){
   const r=await post('/api/employees/match-feishu',{employee_id:emp.id});const candidates=Array.isArray(r.candidates)?r.candidates:[],eligible=candidates.filter(eligibleCandidate).length;
-  report('staff',eligible?`找到 ${eligible} 位可选候选人，尚未绑定`:'未找到符合条件的飞书候选人',[emp.name+'：'+message(r.msg||'请核对候选人资料后选择绑定')],!eligible);
+  report('staff',eligible?`找到 ${eligible} 位可选候选人，尚未绑定`:'未找到符合条件的飞书候选人',[emp.name+'：'+message(r.msg||(r.errors?.length?r.errors.map(message).join('；'):'请核对候选人资料后选择绑定'))],!eligible);
   // ok means eligible candidates exist, never that a binding was performed.
   showCandidates(emp,r);
 }
@@ -323,13 +350,45 @@ $('#download-template').onclick=()=>busy('staff','staff',async()=>{
 $('#import-employees').onclick=()=>busy('staff','staff',async()=>{
   const file=$('#csv').files[0];if(!file)throw new Error('请先选择 CSV 或 XLSX 名单');if(!/\.(csv|xlsx)$/i.test(file.name))throw new Error('仅支持 CSV 或 XLSX 文件');
   const fd=new FormData();fd.append('file',file);const r=await api('/api/employees/import',{method:'POST',body:fd});const errors=Array.isArray(r.errors)?r.errors:[];
-  report('staff',`导入${r.ok===false||errors.length?'部分完成':'完成'}：共 ${r.total??'未知'} 行，新增 ${r.added??0}，更新 ${r.updated??0}，跳过 ${r.skipped??0}`,[`文件：${file.name}`,errors.length?`发现 ${errors.length} 条错误；成功行已提交，请只修正失败行后重新导入。`:r.ok===false?message(r.msg||'接口报告部分失败，但未提供行级错误，请核对名单。'):'未返回行级错误。请对导入员工执行三重核验。',...errors.map(e=>`第 ${e.row??'未知'} 行：${message(e.msg)}`)],r.ok===false||errors.length>0);
+  const failed=r.ok===false||errors.length>0,saved=Number(r.added||0)+Number(r.updated||0);
+  const outcome=failed?(saved>0?'部分完成':'失败'):'完成';
+  const resultDetail=errors.length?`发现 ${errors.length} 条错误；${saved>0?'成功行已提交，请只修正失败行后重新导入。':'没有新增或更新员工，请修正错误后重新导入。'}`:failed?message(r.msg||'接口报告失败，但未提供行级错误，请核对名单。'):'未返回行级错误。请对导入员工执行三重核验。';
+  report('staff',`导入${outcome}：共 ${r.total??'未知'} 行，新增 ${r.added??0}，更新 ${r.updated??0}，跳过 ${r.skipped??0}`,[`文件：${file.name}`,resultDetail,...errors.map(e=>`第 ${e.row??'未知'} 行：${message(e.msg||e.error)}`)],failed);
   $('#csv').value='';await loadStaff();invalidatePreviewEmployees();
 });
 $('#sync-employees').onclick=()=>busy('staff','staff',async()=>{
   if(!await askConfirm('同步飞书员工名单','同步会新增、更新或停用本地员工资料。完成后请核对变更并执行三重核验。',[],'开始同步'))return;
   const r=await post('/api/sync',{fill_birthday:true});const errors=Array.isArray(r.errors)?r.errors:[];
   report('staff',r.ok===false||errors.length?'飞书同步部分完成，成功项已提交':'飞书同步完成',[`新增 ${r.added??0}，更新 ${r.updated??0}，停用 ${r.disabled??0}`,...errors.map(message),...(r.ok===false&&!errors.length?[message(r.msg||'接口报告部分失败，请核对名单。')]:[]),'请核对在职名单与身份核验状态。'],r.ok===false||errors.length>0);await loadStaff();invalidatePreviewEmployees();
+});
+let savedFeishuAppId='';
+async function loadFeishuConfig(){
+  try{
+    const cfg=await api('/api/feishu/config');savedFeishuAppId=cfg.app_id||'';
+    $('#feishu-app-id').value=savedFeishuAppId;$('#feishu-app-secret').value='';
+    $('#feishu-app-secret').placeholder=cfg.secret_configured?'已保存，留空保留原密钥':'填写应用密钥';
+    $('#feishu-connection-state').textContent=cfg.configured?'应用凭据已配置，点击检查通讯录连接。':'尚未连接飞书，请先创建企业自建应用并填写凭据。';
+  }catch(error){$('#feishu-connection-state').textContent=error.message;}
+}
+$('#open-feishu-settings').onclick=()=>document.querySelector('nav [data-tab="sys"]').click();
+$('#feishu-config-form').onsubmit=e=>{
+  e.preventDefault();if(!e.target.reportValidity())return;
+  busy('feishu','sys',async()=>{
+    $('#feishu-config-fields').disabled=true;
+    try{
+      const result=await post('/api/feishu/config',{app_id:$('#feishu-app-id').value.trim(),app_secret:$('#feishu-app-secret').value});
+      requireOK(result);await loadFeishuConfig();report('sys','飞书配置已保存',[result.msg]);
+    }finally{$('#feishu-config-fields').disabled=false;}
+  });
+};
+$('#test-feishu-connection').onclick=()=>busy('feishu','sys',async()=>{
+  if($('#feishu-app-id').value.trim()!==savedFeishuAppId||$('#feishu-app-secret').value)throw new Error('请先保存当前填写的应用凭据，再检查连接');
+  $('#feishu-config-fields').disabled=true;$('#feishu-connection-state').textContent='正在读取飞书通讯录授权范围…';
+  try{
+    const result=await post('/api/feishu/check',{});$('#feishu-connection-state').textContent=result.msg;
+    report('sys',result.ok?'飞书通讯录连接检查通过':'飞书连接未就绪',[result.msg],!result.ok);
+  }catch(error){$('#feishu-connection-state').textContent=error.message;throw error;}
+  finally{$('#feishu-config-fields').disabled=false;}
 });
 async function loadHealth(){
   $('#run-mode').textContent='正在检查…';try{const h=await api('/api/health');$('#run-mode').textContent=h.dry_run===true?'当前为演练模式：完成后记录为「演练完成」，未向飞书发送消息。':h.dry_run===false?'当前为正式模式：确认发送排期后会按计划推送；立即推送需再次确认。':'运行模式未知，请核对服务端配置。';$('#health').textContent=JSON.stringify(h,null,2);}catch(error){$('#run-mode').textContent='检查失败';$('#health').textContent=error.message;}
