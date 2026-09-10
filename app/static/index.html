@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>员工贺卡 · 人事工作台</title>
+<link rel="stylesheet" href="/static/workspace.css">
+<script defer src="/static/workspace.js"></script><script defer src="/static/template-editor.js"></script>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="brand-mark" aria-hidden="true">✦</span><h1>员工贺卡<small>每一份心意，如期送达</small></h1></div>
+  <nav aria-label="工作台导航"><button data-tab="events" aria-current="page">海报审核</button><button data-tab="staff">员工资料</button><button data-tab="tpl">模板设计</button><button data-tab="sys">系统状态</button></nav>
+  <span class="spacer"></span><button id="refresh" class="header-refresh" title="刷新当前页" aria-label="刷新当前页">↻</button>
+</header>
+<main>
+<section id="tab-events">
+  <div class="page-head"><div><h2>海报审核</h2><p>查看贺卡、核对收件人，批量确认发送排期。</p></div><div class="page-head-actions"><button id="scan" class="primary">＋ 扫描生成</button></div></div>
+  <div class="filter-bar" aria-label="筛选海报">
+    <input id="event-search" type="search" placeholder="搜索姓名、部门或飞书 ID" aria-label="搜索海报">
+    <select id="scope" aria-label="审核周期"><option value="all">全部时间</option><option value="this">本周</option><option value="next">下周</option><option value="pending">待处理</option></select>
+    <select id="event-type" aria-label="贺卡类型"><option value="">全部类型</option><option value="birthday">生日</option><option value="anniversary">入职周年</option></select>
+    <select id="event-status" aria-label="审核状态"><option value="">全部状态</option><option value="ready">待确认</option><option value="confirmed">已确认待推送</option><option value="needs_regeneration">需重新生成</option><option value="blocked">核验阻止</option><option value="generating">生成中</option><option value="gen_failed">生成失败</option><option value="failed">推送失败</option><option value="pushing">推送中</option><option value="pushed">已推送</option><option value="simulated">演练完成</option><option value="skipped">已跳过</option><option value="delivery_unknown">发送回执不明</option><option value="expired">已过期</option></select>
+    <select id="event-department" aria-label="海报部门"><option value="">全部部门</option></select>
+    <span class="spacer"></span><select id="event-sort" aria-label="日期排序"><option value="asc">日期 ↑</option><option value="desc">日期 ↓</option></select><span id="events-loading" class="meta" role="status"></span>
+  </div>
+  <div id="event-reports" class="reports" aria-live="polite"></div>
+  <div class="batch-bar"><b id="event-selected-count">已选 0 条</b><button id="confirm-all" disabled>批量确认排期</button><button id="regenerate-selected" disabled>重新生成</button><button id="skip-selected" disabled>跳过本次</button><button id="clear-events" disabled>清空选择</button><span class="spacer"></span><span id="evsum" class="meta">0 条记录</span></div>
+  <div id="events"><div class="empty">正在加载海报…</div></div>
+</section>
+<section id="tab-staff" hidden>
+  <div class="page-head"><div><h2>员工资料</h2><p>统一维护员工名单，通过姓名、部门和飞书 ID 核验收件人。</p></div><div class="page-head-actions"><button id="sync-employees">从飞书同步</button><button id="add-employee" class="primary">＋ 新增员工</button></div></div>
+  <details class="import-panel"><summary>导入员工名单 <span class="meta">· CSV / XLSX</span></summary><div class="import-content"><label class="field">选择名单文件<input type="file" id="csv" accept=".csv,.xlsx"></label><button id="download-template">下载导入模板</button><button id="import-employees" class="primary">开始导入</button><span class="meta">按行显示新增、更新和错误结果。</span></div></details>
+  <div class="filter-bar" aria-label="筛选员工">
+    <input id="kw" type="search" placeholder="搜索姓名、工号或飞书 ID" aria-label="搜索员工">
+    <select id="staff-filter" aria-label="在职状态"><option value="active">在职员工</option><option value="all">全部员工</option><option value="inactive">已离职 / 停用</option></select>
+    <select id="staff-department" aria-label="员工部门"><option value="">全部部门</option></select>
+    <select id="staff-identity" aria-label="身份核验状态"><option value="">全部核验状态</option><option value="verified">核验通过</option><option value="pending">待核验</option><option value="failed">核验失败</option></select>
+  </div>
+  <div id="staff-reports" class="reports" aria-live="polite"></div>
+  <div class="batch-bar"><b id="selected-count">已选 0 人</b><button id="verify-selected" disabled>三重核验</button><button id="disable-selected" class="danger" disabled>批量离职 / 停用</button><button id="clear-selection" disabled>清空选择</button><span class="spacer"></span><span id="staff-count" class="meta">0 条记录</span></div>
+  <div id="staff"></div>
+</section>
+<section id="tab-tpl" hidden>
+  <div class="page-head"><div><h2>模板设计</h2><p>选好底图，编辑一段祝福文案，名单字段会自动填入每位员工的贺卡。</p></div><span class="spacer"></span><span id="draft-state" class="badge">尚未加载</span></div>
+  <div id="tpl-reports" class="reports" aria-live="polite"></div>
+  <fieldset id="tpl-work" disabled><div class="tpl-layout">
+    <div class="tpl-form">
+      <label class="field">贺卡类型<select id="tpl-key"></select></label>
+      <div id="tpl-background"></div><div id="tpl-vars" class="grid vars-grid"></div><div id="tpl-editor"></div>
+      <div class="bar save-bar"><button id="save-tpl" class="primary">保存模板</button><button id="reset-tpl">撤销修改</button><span class="meta">保存后用于新生成的海报。</span></div>
+    </div>
+    <aside class="tpl-preview-panel">
+      <h3>海报预览</h3><div class="grid"><label class="field full">预览员工<select id="pv-employee"><option value="">正在加载…</option></select></label><label class="field">事件日期<input id="pv-date" type="date" required></label><label class="field">周年数<input id="pv-years" type="number" readonly></label></div>
+      <p id="pv-identity" class="meta" style="margin:9px 0"></p>
+      <div class="bar"><button id="preview-tpl">更新预览</button><label class="meta"><input id="auto-preview" type="checkbox" checked> 自动预览</label></div>
+      <p id="preview-state" class="preview-state" role="status">正在准备预览…</p><div id="tpl-preview" class="preview-stage"><div class="empty">预览当前文案与字体效果<br>点击海报可放大查看</div></div>
+    </aside>
+  </div></fieldset>
+</section>
+<section id="tab-sys" hidden><div class="page-head"><div><h2>系统状态</h2><p>查看运行模式、飞书连接及任务状态。</p></div><span class="spacer"></span><button id="check-health">重新检查</button></div><div class="panel"><div class="bar" style="margin-bottom:18px"><label class="meta">管理口令 <input id="token" class="token" type="password" placeholder="未设可留空" autocomplete="off"></label><span class="meta">填写后刷新对应页面。</span></div><p id="run-mode" class="hint">尚未检查</p><pre id="health"></pre></div></section>
+</main>
+
+
+<dialog id="employee-dialog" aria-labelledby="employee-title"><form id="employee-form"><div class="dialog-head"><h3 id="employee-title">员工资料</h3></div><fieldset id="employee-fields"><div class="dialog-body"><div class="grid">
+  <label class="field">姓名 *<input name="name" required maxlength="120"></label><label class="field">部门 *<input name="department" required maxlength="240"></label><label class="field">工号<input name="employee_no"></label><label class="field">邮箱 / 手机号<input name="email"></label><label class="field">入职日期<input name="join_date" type="date"></label><label class="field">生日<input name="birth_date" type="date"></label><label class="field full">飞书 ID（open_id）<input name="feishu_open_id" placeholder="ou_…；未知可先留空，保存后匹配飞书"></label><label class="field full">备注<textarea name="note" rows="2"></textarea></label>
+  </div><p class="hint" style="margin-top:14px">姓名、部门、飞书 ID 需与飞书通讯录一致。资料变更后以服务端核验状态为准；需重新生成的海报必须重新审核。</p><p id="employee-error" class="error" role="alert"></p></div><div class="dialog-foot"><button type="button" data-close="employee-dialog">取消</button><button type="submit" class="primary">保存资料</button></div></fieldset></form></dialog>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-head"><h3 id="confirm-title"></h3></div><div class="dialog-body"><p id="confirm-message" class="details-line"></p><ul id="confirm-items"></ul></div><div class="dialog-foot"><button id="confirm-cancel">取消</button><button id="confirm-accept" class="primary">确认</button></div></dialog>
+<dialog id="candidate-dialog" aria-labelledby="candidate-title"><div class="dialog-head"><h3 id="candidate-title">核对飞书候选人</h3><span class="spacer"></span><button data-close="candidate-dialog">关闭</button></div><div class="dialog-body"><p id="candidate-employee" class="details-line"></p><p class="hint" style="margin-top:10px">候选匹配不等于已绑定。只有符合条件的候选人可选；选择后仍由服务端严格核验姓名、部门和飞书 ID。</p><p id="candidate-message" class="error" role="alert"></p><div id="candidates"></div></div></dialog>
+<dialog id="zoom-dialog" aria-label="海报大图"><div class="bar" style="padding:10px 14px"><span class="meta">海报大图</span><span class="spacer"></span><button data-close="zoom-dialog">关闭</button></div><img id="zoom-img" alt="海报完整预览"></dialog>
+<div id="toast" role="status" hidden></div>
+<dialog id="event-detail-dialog"><div class="dialog-head"><h3>海报详情</h3><span class="spacer"></span><button data-close="event-detail-dialog">关闭</button></div><div id="event-detail" class="dialog-body"></div></dialog>
+</body>
+</html>

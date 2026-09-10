@@ -1,0 +1,260 @@
+{
+  "_说明": [
+    "2026-08-28 改版：固定设计底图 + 手写字体叠字，不再用豆包生成底图。",
+    "AI 已关闭 (ai.enabled=false)，豆包只保留给未来可能的变体需求。",
+    "字体：原设计字体未随项目提供，暂用 auto（项目字体优先，再用系统中文字体；Windows 通常为微软雅黑）。上传品牌字体后可显式选择恢复字体风格。",
+    "图层类型：text=单行 / paragraph=多行自动换行 / image / rect",
+    "占位符：{name} {years} {month} {day} {join_date} {company}"
+  ],
+  "canvas": {
+    "width": 1080,
+    "height": 2340
+  },
+  "templates": {
+    "birthday": {
+      "label": "生日贺卡",
+      "base_image": "assets/templates/birthday_base.png",
+      "ai": {
+        "enabled": false
+      },
+      "layers": [
+        {
+          "type": "text",
+          "text": "亲爱的 {name}：",
+          "xy": [
+            130,
+            310
+          ],
+          "anchor": "la",
+          "size": 63,
+          "bold": true,
+          "font": "auto",
+          "color": "#5A3E2B",
+          "flow": true,
+          "shadow": {
+            "x": 2,
+            "y": 3,
+            "blur": 5,
+            "color": "#3A281840"
+          }
+        },
+        {
+          "type": "paragraph",
+          "text": "四时有序，花开有期\n       旦逢良辰，顺颂时宜\n愿你新的一岁，眼里有光，心中有梦，\n工作有收获，生活有惊喜，所遇皆暖，所行皆顺。\n\n今天，烛光为你点亮，生日快乐！",
+          "xy": [
+            130,
+            450
+          ],
+          "halign": "l",
+          "size": 45,
+          "font": "auto",
+          "color": "#5A3E2B",
+          "line_gap": 68,
+          "max_width": 820,
+          "flow": true,
+          "shadow": {
+            "x": 2,
+            "y": 3,
+            "blur": 5,
+            "color": "#3A281840"
+          },
+          "bold": false,
+          "wrap": true,
+          "anchor": "lt",
+          "max_height": 700,
+          "min_size": 24,
+          "spacing": 0
+        },
+        {
+          "type": "paragraph",
+          "text": "",
+          "xy": [
+            130,
+            730
+          ],
+          "halign": "l",
+          "size": 45,
+          "font": "auto",
+          "color": "#5A3E2B",
+          "line_gap": 78,
+          "max_width": 820,
+          "flow": true,
+          "shadow": {
+            "x": 2,
+            "y": 3,
+            "blur": 5,
+            "color": "#3A281840"
+          }
+        },
+        {
+          "type": "text",
+          "text": "",
+          "xy": [
+            130,
+            1010
+          ],
+          "anchor": "la",
+          "size": 48,
+          "bold": true,
+          "font": "auto",
+          "color": "#C0392B",
+          "flow": true,
+          "shadow": {
+            "x": 2,
+            "y": 3,
+            "blur": 5,
+            "color": "#3A281840"
+          }
+        },
+        {
+          "type": "text",
+          "text": "{company}",
+          "xy": [
+            950,
+            1160
+          ],
+          "anchor": "ra",
+          "size": 38,
+          "font": "auto",
+          "color": "#8A6E5B",
+          "flow": true,
+          "shadow": {
+            "x": 2,
+            "y": 3,
+            "blur": 5,
+            "color": "#3A281840"
+          },
+          "halign": "r",
+          "max_width": 820
+        }
+      ],
+      "flow_gap": 55
+    },
+    "anniversary": {
+      "label": "入职周年贺卡",
+      "base_image": "assets/templates/anniversary_base.png",
+      "ai": {
+        "enabled": false
+      },
+      "layers": [
+        {
+          "type": "text",
+          "text": "亲爱的 {name}：",
+          "xy": [
+            130,
+            270
+          ],
+          "anchor": "la",
+          "size": 63,
+          "bold": true,
+          "font": "auto",
+          "color": "#F5E9D0",
+          "flow": true,
+          "shadow": {
+            "x": 2,
+            "y": 4,
+            "blur": 6,
+            "color": "#2B0A0A66"
+          }
+        },
+        {
+          "type": "paragraph",
+          "text": "感谢你\n在过去的日子里与公司一路同行，\n你的每一份投入、每一次坚持，\n都是团队前进路上的重要力量。\n愿未来继续携手同行，\n愿你在热爱的工作中收获成长，在并肩奋斗中遇见更好的自己。\n\n入职 {years} 周年快乐，每一颗星辰都有属于自己的光芒，感谢你选择与我们并肩闪耀。",
+          "xy": [
+            130,
+            410
+          ],
+          "halign": "l",
+          "size": 40,
+          "font": "auto",
+          "color": "#F5E9D0",
+          "line_gap": 60,
+          "max_width": 820,
+          "flow": true,
+          "shadow": {
+            "x": 2,
+            "y": 4,
+            "blur": 6,
+            "color": "#2B0A0A66"
+          },
+          "bold": false,
+          "wrap": true,
+          "anchor": "lt",
+          "max_height": 700,
+          "min_size": 24,
+          "spacing": 0
+        },
+        {
+          "type": "paragraph",
+          "text": "",
+          "xy": [
+            130,
+            700
+          ],
+          "halign": "l",
+          "size": 40,
+          "font": "auto",
+          "color": "#F5E9D0",
+          "line_gap": 65,
+          "max_width": 820,
+          "flow": true,
+          "shadow": {
+            "x": 2,
+            "y": 4,
+            "blur": 6,
+            "color": "#2B0A0A66"
+          }
+        },
+        {
+          "type": "paragraph",
+          "text": "",
+          "xy": [
+            130,
+            1020
+          ],
+          "anchor": "la",
+          "size": 38,
+          "bold": true,
+          "font": "auto",
+          "color": "#F0C75E",
+          "max_width": 820,
+          "flow": true,
+          "shadow": {
+            "x": 2,
+            "y": 4,
+            "blur": 6,
+            "color": "#2B0A0A66"
+          },
+          "line_gap": 55,
+          "min_size": 26,
+          "halign": "l"
+        },
+        {
+          "type": "text",
+          "text": "—— {company}",
+          "xy": [
+            950,
+            1160
+          ],
+          "anchor": "ra",
+          "size": 38,
+          "font": "auto",
+          "color": "#D8C8A8",
+          "flow": true,
+          "shadow": {
+            "x": 2,
+            "y": 4,
+            "blur": 6,
+            "color": "#2B0A0A66"
+          },
+          "halign": "r",
+          "max_width": 820
+        }
+      ],
+      "flow_gap": 32
+    }
+  },
+  "vars": {
+    "company": "熊猫布布"
+  }
+}

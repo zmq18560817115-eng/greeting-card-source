@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/
+output/
+logs/
+feishu_probe_result.csv
+*.db
+*.db-wal
+*.db-shm
