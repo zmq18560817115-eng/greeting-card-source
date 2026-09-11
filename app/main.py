@@ -11,10 +11,10 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import bindings, compose, employees, feishu, feishu_config, fonts, pipeline, presentation, push, scheduler, staff_template, sync, templates
+from . import access, bindings, compose, employees, feishu, feishu_config, fonts, pipeline, presentation, push, scheduler, staff_template, sync, templates
 from .dates import completed_years_since, next_cycle, parse_date, this_cycle
 from .db import init_db, now, query, query_one, tx
-from .settings import ADMIN_TOKEN, BASE_DIR, DRY_RUN, OUTPUT_DIR
+from .settings import ADMIN_TOKEN, BASE_DIR, DRY_RUN, HOST, OUTPUT_DIR
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
                     handlers=[logging.StreamHandler(), logging.FileHandler(BASE_DIR / "logs" / "app.log", encoding="utf-8")])
@@ -32,8 +32,31 @@ def auth(x_admin_token: str = Header(default=""), token: str = Query(default="")
     return True
 
 
+@app.middleware("http")
+async def protect_employee_files(request, call_next):
+    path = request.url.path
+    is_file = path == "/files" or path.startswith("/files/")
+    header_authorized = bool(ADMIN_TOKEN and request.headers.get("X-Admin-Token") == ADMIN_TOKEN)
+    if is_file and ADMIN_TOKEN and not (header_authorized or
+            access.valid_file_session(request.cookies.get(access.COOKIE_NAME), ADMIN_TOKEN)):
+        return JSONResponse({"detail": "请先在后台填写管理口令，再查看海报"}, status_code=401,
+                            headers={"Cache-Control": "private, no-store"})
+    response = await call_next(request)
+    if is_file or path.startswith("/api/"):
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+    # Successful API authentication grants a short-lived, file-only cookie so
+    # normal <img> previews work without exposing the admin token in a URL.
+    if path.startswith("/api/") and header_authorized and 200 <= response.status_code < 300:
+        response.set_cookie(access.COOKIE_NAME, access.issue_file_session(ADMIN_TOKEN),
+                            max_age=access.SESSION_SECONDS, httponly=True, samesite="strict",
+                            secure=request.url.scheme == "https", path="/files")
+    return response
+
+
 @app.on_event("startup")
 def _startup():
+    access.require_private_access(HOST, ADMIN_TOKEN)
     init_db()
     from .recovery import recover_interrupted_jobs
     recover_interrupted_jobs()

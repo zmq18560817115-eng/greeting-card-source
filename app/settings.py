@@ -50,7 +50,7 @@ WEEKLY_CRON_DAY = os.environ.get("WEEKLY_CRON_DAY", "thu")
 WEEKLY_CRON_HOUR, WEEKLY_CRON_MINUTE = _t("WEEKLY_CRON_TIME", "20:00")
 
 # 服务
-HOST = os.environ.get("HOST", "0.0.0.0")
+HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8848"))
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 DRY_RUN = _b("DRY_RUN", "true")
