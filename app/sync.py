@@ -70,7 +70,7 @@ def _extract_birthday(user, attr_ids):
     return None
 
 
-def _sync_user(user, attr_ids):
+def _sync_user(user, attr_ids, warnings=None):
     if not isinstance(user, Mapping) or not isinstance(user.get("open_id"), str) or not user["open_id"].strip():
         raise employees.EmployeeError("飞书用户缺少 open_id", "missing_open_id")
     open_id = user["open_id"]
@@ -82,8 +82,14 @@ def _sync_user(user, attr_ids):
     if not resigned:
         try:
             departments = employees.resolve_departments(user)
-        except employees.IdentityError:
-            pass  # Department access is optional for name/ID association.
+        except employees.IdentityError as exc:
+            # Department access is optional for binding, but missing fields must be explained.
+            if warnings is not None:
+                hint = ("部门未同步：飞书未返回部门信息，请检查用户组织架构信息权限及员工的部门资料。"
+                        if exc.code == "missing_departments" else
+                        "部门未同步：无法读取完整部门名称，请检查部门读取权限及通讯录范围。")
+                if hint not in warnings:
+                    warnings.append(hint)
     with db.tx() as conn:
         conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute("SELECT * FROM employees WHERE feishu_open_id=?", (open_id,)).fetchone()
@@ -168,7 +174,7 @@ def sync_from_feishu(fill_birthday=True):
                     raise employees.EmployeeError("同一 open_id 返回冲突的通讯录记录，拒绝同步", "conflicting_directory_rows")
                 if isinstance(user.get("name"), str) and len(by_name.get(user["name"], ())) > 1:
                     raise employees.EmployeeError("飞书中存在多个同名人员，无法唯一对应", "ambiguous_employee")
-            action, error = _sync_user(user, attr_ids)
+            action, error = _sync_user(user, attr_ids, warnings)
             if error:
                 raise error
             result[action] += 1

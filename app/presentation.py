@@ -1,7 +1,7 @@
 """Derived review fields and readable notices; original records are not rewritten."""
 import re
 
-from .dates import completed_years_since, parse_date
+from .dates import completed_years_since, parse_birthday
 
 
 def friendly_error(value):
@@ -43,10 +43,10 @@ def friendly_error(value):
 
 
 def birthday_display(value):
-    day = parse_date(value)
+    day = parse_birthday(value)
     if not day:
         return None
-    return day.strftime("%m-%d") if day.year <= 1901 else day.isoformat()
+    return day.strftime("%m-%d")
 
 
 def employee_fields(emp):

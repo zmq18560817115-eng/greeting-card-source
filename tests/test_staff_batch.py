@@ -60,6 +60,16 @@ class StaffBatchTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(self.row(0)["department"], "测试部门")
 
+    def test_batch_edit_birthday_accepts_month_day_but_join_date_requires_year(self):
+        response = self.submit([self.change(0, birth_date='09-11')])
+        self.assertEqual(response.status_code, 200, response.text)
+        rows = self.client.get('/api/employees').json()
+        updated = next(row for row in rows if row['id'] == self.ids[0])
+        self.assertEqual(updated['birth_date_display'], '09-11')
+        response = self.submit([self.change(0, join_date='09-11')])
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.row(0)['join_date'], '2021-02-01')
+
     def test_duplicate_employee_number_rolls_back_data_and_event_invalidations(self):
         event = self.event(0)
         response = self.submit([self.change(0, department="新部门"), self.change(1, employee_no="3")])
@@ -109,8 +119,46 @@ class StaffBatchTests(unittest.TestCase):
 
     def test_duplicate_rows_unknown_fields_missing_snapshot_and_auth(self):
         valid = self.change(0, department="新部门")
-        for updates in ([valid, valid], [{**valid, "changes": {"feishu_open_id": "ou_bad"}}],
+        for updates in ([valid, valid], [{**valid, "changes": {"feishu_user_id": "user_bad"}}],
                         [{**valid, "original": {}}], [], None):
             self.assertEqual(self.submit(updates).status_code, 400)
         with patch.object(main, "ADMIN_TOKEN", "test-token"):
             self.assertEqual(self.submit([valid]).status_code, 401)
+
+    def test_distinct_ids_can_be_corrected_per_row_and_revoke_pending_approval(self):
+        event = self.event(0)
+        response = self.submit([self.change(0, feishu_open_id="ou_first"), self.change(1, feishu_open_id="ou_second")])
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["updated"], 2)
+        self.assertEqual((self.row(0)["feishu_open_id"], self.row(1)["feishu_open_id"]), ("ou_first", "ou_second"))
+        self.assertIsNone(self.row(2)["feishu_open_id"])
+        self.assertEqual(db.query_one("SELECT status FROM events WHERE id=?", (event,))["status"], "needs_regeneration")
+        self.assertNotEqual(self.row(0)["identity_status"], "verified")
+
+    def test_duplicate_id_rolls_back_the_entire_batch(self):
+        event = self.event(0)
+        response = self.submit([self.change(0, feishu_open_id="ou_same"), self.change(1, feishu_open_id="ou_same")])
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIsNone(self.row(0)["feishu_open_id"])
+        self.assertIsNone(self.row(1)["feishu_open_id"])
+        self.assertEqual(db.query_one("SELECT status FROM events WHERE id=?", (event,))["status"], "confirmed")
+
+    def test_blank_invalid_and_stale_id_changes_are_rejected(self):
+        for value in ("", "wrong_id", 42):
+            response = self.submit([self.change(0, department="新部门"), self.change(1, feishu_open_id=value)])
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertEqual(self.row(0)["department"], "测试部门")
+        updates = [self.change(0, department="新部门"), self.change(1, feishu_open_id="ou_proposed")]
+        employees.save_employee({"id": self.ids[1], "feishu_open_id": "ou_newer"})
+        response = self.submit(updates)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(self.row(0)["department"], "测试部门")
+        self.assertEqual(self.row(1)["feishu_open_id"], "ou_newer")
+
+    def test_old_batch_client_must_refresh_to_include_id_snapshot(self):
+        update = self.change(0, department="新部门")
+        del update["original"]["feishu_open_id"]
+        response = self.submit([update])
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("刷新", response.json()["detail"])
+        self.assertEqual(self.row(0)["department"], "测试部门")

@@ -11,8 +11,8 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import access, bindings, compose, employees, feishu, feishu_config, fonts, pipeline, presentation, push, scheduler, staff_template, sync, templates
-from .dates import completed_years_since, next_cycle, parse_date, this_cycle
+from . import access, bindings, compose, employees, feishu, feishu_config, field_report, fonts, pipeline, presentation, push, scheduler, staff_template, sync, templates
+from .dates import completed_years_since, match_employee, next_cycle, parse_birthday, parse_date, this_cycle
 from .db import init_db, now, query, query_one, tx
 from .settings import ADMIN_TOKEN, BASE_DIR, DRY_RUN, HOST, OUTPUT_DIR
 
@@ -75,6 +75,7 @@ def _event_view(ev):
     for card in cards:
         card["url"] = f"/files/cards/{Path(card['file_path']).name}" if card.get("file_path") else None
     return {**ev, **presentation.delivery_fields(ev),
+            "years": ev.get("years") if ev.get("event_type") == "anniversary" else None,
             "anniversary_years": completed_years_since(emp.get("join_date"), ev.get("event_date")) if parse_date(ev.get("event_date")) else None,
             "exception_hint": presentation.event_notice(ev, emp),
             "employee": presentation.employee_fields({k: emp.get(k) for k in
@@ -84,14 +85,18 @@ def _event_view(ev):
 
 
 @app.get("/api/events")
-def list_events(scope: str = "all", _=Depends(auth)):
-    sql, params = "SELECT * FROM events", []
+def list_events(scope: str = "all", employee_id: int | None = None, _=Depends(auth)):
+    sql, params = "SELECT * FROM events WHERE 1=1", []
+    if employee_id is not None:
+        employee_id = employees._id(employee_id)
+        sql += " AND employee_id=?"
+        params.append(employee_id)
     if scope in ("next", "this"):
         start, end = next_cycle() if scope == "next" else this_cycle()
-        sql += " WHERE event_date BETWEEN ? AND ?"
-        params = [start.isoformat(), end.isoformat()]
+        sql += " AND event_date BETWEEN ? AND ?"
+        params += [start.isoformat(), end.isoformat()]
     elif scope == "pending":
-        sql += " WHERE status IN ('ready','generating','blocked','gen_failed','needs_regeneration')"
+        sql += " AND status IN ('ready','generating','blocked','gen_failed','needs_regeneration')"
     elif scope != "all":
         raise ValueError("未知周期")
     return [_event_view(ev) for ev in query(sql + " ORDER BY event_date, trigger_at", params)]
@@ -171,15 +176,43 @@ def list_employees(keyword: str = "", only_active: bool = True, _=Depends(auth))
 
 
 @app.post("/api/employees")
-def upsert_employee(payload: dict = Body(...), _=Depends(auth)):
+def upsert_employee(payload: dict = Body(...), defer_binding: bool = False, _=Depends(auth)):
     result = employees.save_employee(payload)
-    result["binding"] = bindings.auto_bind([result["id"]])
+    result["binding"] = (bindings.submit_auto_bind if defer_binding else bindings.auto_bind)([result["id"]])
     return result
+
+
+@app.get("/api/binding-tasks/{task_id}")
+def employee_binding_task(task_id: str, _=Depends(auth)):
+    task = bindings.binding_task(task_id)
+    if not task:
+        raise HTTPException(404, "对应任务已结束或服务已重启，请刷新员工资料查看结果")
+    return task
+
+
+@app.post("/api/employees/{employee_id}/generate-today")
+def generate_employee_today(employee_id: int, _=Depends(auth)):
+    employee_id = employees._id(employee_id)
+    emp = query_one("SELECT * FROM employees WHERE id=?", (employee_id,))
+    if not emp:
+        raise HTTPException(404, "员工不存在")
+    if emp["active"] != 1:
+        raise ValueError("员工已离职，无法生成贺卡")
+    if not parse_birthday(emp.get("birth_date")) and not parse_date(emp.get("join_date")):
+        raise ValueError("请先补充该员工的生日（月日）或完整入职日期")
+    today = parse_date(now()[:10])
+    if not match_employee(emp, today, today):
+        return {"ok": True, "employee_id": employee_id, "task_id": None, "created": 0, "total": 0,
+                "msg": "按当前员工资料，今天不是生日或入职周年，无需生成贺卡。"}
+    tid, task = pipeline.run_weekly_async(cycle=(today, today), employee_id=employee_id)
+    return {"ok": True, "employee_id": employee_id, "task_id": tid, "created": task["created"], "total": task["total"],
+            "msg": "已提交该员工今日贺卡生成，请在完成后核查海报并确认推送。" if task["total"] else
+                   "该员工今日贺卡已存在，请查看推送状态；已发送的贺卡不会重复生成或推送。"}
 
 
 HEADER_MAP = {
     "姓名": "name", "工号": "employee_no", "邮箱": "email", "部门": "department",
-    "入职日期": "join_date", "入职时间": "join_date", "生日": "birth_date", "出生日期": "birth_date",
+    "入职日期": "join_date", "入职时间": "join_date", "生日": "birth_date", "生日（月日）": "birth_date", "出生日期": "birth_date",
     "飞书id": "feishu_open_id", "飞书open_id": "feishu_open_id", "open_id": "feishu_open_id",
     "飞书user_id": "feishu_user_id", "备注": "note",
 }
@@ -250,9 +283,9 @@ def batch_disable(payload: dict = Body(...), _=Depends(auth)):
 
 
 @app.post("/api/employees/batch-update")
-def batch_update_employees(payload: dict = Body(...), _=Depends(auth)):
+def batch_update_employees(payload: dict = Body(...), defer_binding: bool = False, _=Depends(auth)):
     result = employees.batch_update(payload.get("updates"))
-    result["binding"] = bindings.auto_bind(result["ids"])
+    result["binding"] = (bindings.submit_auto_bind if defer_binding else bindings.auto_bind)(result["ids"])
     return result
 
 
@@ -371,6 +404,16 @@ def health(_=Depends(auth)):
             "jobs": scheduler.jobs(), "feishu": {"ok": feishu_ok, "error": feishu_err},
             "missing_fields": missing, "started_at": SERVICE_STARTED_AT,
             "delivery_flow": "notice_then_full_card", "recipient_rule": "unique_exact_name_and_open_id"}
+
+
+@app.get("/api/feishu/fields")
+def get_field_mapping(_=Depends(auth)):
+    return field_report.local_report()
+
+
+@app.post("/api/feishu/fields/check")
+def check_field_mapping(_=Depends(auth)):
+    return field_report.check_fields()
 
 
 @app.exception_handler(ValueError)

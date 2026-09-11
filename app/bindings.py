@@ -1,8 +1,58 @@
 """Automatically associate exact, unique employee names with Feishu recipients."""
 from collections import defaultdict
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+import uuid
 
 from . import db, employees, feishu
+
+_binding_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="employee-binding")
+_binding_tasks = {}
+_binding_tasks_lock = Lock()
+
+
+def submit_auto_bind(ids):
+    """Return after the local save; directory latency must not hold the editor open."""
+    ids = list(dict.fromkeys(employees._id(eid) for eid in ids))
+    base = {"matched": 0, "pending": len(ids), "errors": []}
+    if not ids:
+        return {**base, "status": "done", "msg": "没有需要更新的飞书对应关系。"}
+    with _binding_tasks_lock:
+        # Bound both queued work and retained results. Saved employee data is never rolled back.
+        if sum(task["status"] == "running" for task in _binding_tasks.values()) >= 20:
+            return {**base, "status": "failed", "msg": "资料已保存，飞书对应任务较多，请稍后从飞书同步。"}
+        for key in list(_binding_tasks):
+            if len(_binding_tasks) < 100:
+                break
+            if _binding_tasks[key]["status"] != "running":
+                del _binding_tasks[key]
+        task_id = uuid.uuid4().hex
+        task = {**base, "task_id": task_id, "status": "running", "msg": "资料已保存，正在后台更新飞书对应关系。"}
+        _binding_tasks[task_id] = task
+        submitted = dict(task)
+
+    def work():
+        try:
+            result = {**auto_bind(ids), "status": "done"}
+        except Exception as exc:
+            result = {**base, "status": "failed", "msg": "资料已保存，飞书对应未完成：" + feishu.connection_error(exc)}
+        with _binding_tasks_lock:
+            task.update(result)
+
+    try:
+        _binding_pool.submit(work)
+    except Exception:
+        with _binding_tasks_lock:
+            task.update(status="failed", msg="资料已保存，飞书对应任务启动失败，请稍后从飞书同步。")
+            return dict(task)
+    return submitted
+
+
+def binding_task(task_id):
+    with _binding_tasks_lock:
+        result = _binding_tasks.get(task_id)
+        return dict(result) if result else None
 
 
 @feishu.in_application

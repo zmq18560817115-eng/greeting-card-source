@@ -7,6 +7,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const sameId = (a,b) => a != null && b != null && String(a) === String(b);
 const isActive = e => e?.active === true || e?.active === 1 || e?.active === '1';
 const openId = e => e?.feishu_open_id || e?.open_id || '';
+const birthdayText = value => StaffFilters.monthDay(value) || String(value ?? '');
 const STATUS = Object.freeze({generating:'生成中',ready:'待确认',confirmed:'已确认待推送',pushing:'推送中',pushed:'已推送',failed:'推送失败',gen_failed:'生成失败',skipped:'已跳过',blocked:'核验阻止',simulated:'演练完成',needs_regeneration:'资料变更，需重新生成',delivery_unknown:'发送回执不明',expired:'日期已过期，停止发送'});
 const DELIVERY = Object.freeze({sent:'已推送',not_sent:'未推送',sending:'推送中',unknown:'回执不明',simulated:'演练未发送'});
 const own = (object,key) => Object.prototype.hasOwnProperty.call(object,key);
@@ -56,9 +57,11 @@ function updateBusy(){
   for(const id of ['scan','confirm-all'])$('#'+id).disabled=BUSY.has('events') || (id==='confirm-all' && !EVENTS.some(e=>EVENT_SELECTED.has(String(e.id))&&canConfirm(e)));
   for(const id of ['add-employee','import-employees','download-template','sync-employees','kw','staff-filter','staff-department','staff-join-from','staff-join-to','staff-birth-from','staff-birth-to','staff-reset-filters'])$('#'+id).disabled=BUSY.has('staff');
   $('#employee-fields').disabled=BUSY.has('staff');
+  $('#check-field-mapping').disabled=BUSY.has('fields')||BUSY.has('staff');
   $('#staff-batch-fields').disabled=BUSY.has('staff');
   for(const b of document.querySelectorAll('#staff button,#staff input'))b.disabled=BUSY.has('staff') || b.dataset.locked==='true';
-  for(const b of document.querySelectorAll('#events button[data-action],#event-detail button[data-action]'))b.disabled=BUSY.has('events') || b.dataset.locked==='true';
+  for(const b of document.querySelectorAll('#events button[data-action],#event-detail button[data-action],#review-people button'))b.disabled=BUSY.has('events') || eventLoading || b.dataset.locked==='true';
+  $('#event-search').disabled=BUSY.has('events');
   $('#tpl-work').disabled=!DRAFT || BUSY.has('tpl');$('#preview-tpl').disabled=BUSY.has('preview') || !DRAFT;
   updateSelection();updateEventSelection();
 }
@@ -72,8 +75,8 @@ function askConfirm(title,description,items=[],accept='确认'){
 function finishConfirm(ok){$('#confirm-dialog').close();const done=confirmResolve;confirmResolve=null;done?.(ok);}
 $('#confirm-accept').onclick=()=>finishConfirm(true);$('#confirm-cancel').onclick=()=>finishConfirm(false);
 $('#confirm-dialog').addEventListener('cancel',e=>{e.preventDefault();finishConfirm(false);});
-document.addEventListener('click',e=>{const b=e.target.closest('[data-close]');if(b&&(!['employee-dialog','staff-batch-dialog','background-dialog'].includes(b.dataset.close)||!BUSY.has(b.dataset.close==='background-dialog'?'tpl':'staff')))$('#'+b.dataset.close).close();});
-for(const id of ['employee-dialog','staff-batch-dialog'])$('#'+id).addEventListener('cancel',e=>{if(BUSY.has('staff'))e.preventDefault();});
+document.addEventListener('click',e=>{const b=e.target.closest('[data-close]');if(b&&(!['staff-batch-dialog','background-dialog'].includes(b.dataset.close)||!BUSY.has(b.dataset.close==='background-dialog'?'tpl':'staff')))$('#'+b.dataset.close).close();});
+for(const id of ['staff-batch-dialog'])$('#'+id).addEventListener('cancel',e=>{if(BUSY.has('staff'))e.preventDefault();});
 try{$('#token').value=localStorage.getItem('gc_token')||'';}catch{/* The input also works when browser storage is unavailable. */}
 $('#token').oninput=()=>{try{localStorage.setItem('gc_token',$('#token').value);}catch{}};
 document.querySelectorAll('nav button').forEach(b=>b.onclick=async()=>{
@@ -84,7 +87,8 @@ async function refresh(){if(TAB==='events')await loadEvents();if(TAB==='staff')a
 $('#refresh').onclick=refresh;
 
 // Event actions re-read state immediately before posting. Terminal deliveries remain read-only.
-let EVENTS=[],ALL_EVENTS=[],EVENT_SELECTED=new Set(),eventLoad=0,eventLoading=false;const EVENT_LOGS=new Map();
+let EVENTS=[],ALL_EVENTS=[],EVENT_SELECTED=new Set(),eventLoad=0,eventLoading=false;
+let EVENT_PEOPLE=null,REVIEW_EMPLOYEE_ID=null,reviewChooseState=false,reviewPeopleMarkup=null;const EVENT_LOGS=new Map();
 function anniversaryText(years){return Number.isInteger(years)&&years>=0?(years===0?'未满 1 年':years+' 周年'):'待补入职日期';}
 function deliveryState(e){return e.delivery_state||(e.status==='delivery_unknown'?'unknown':e.status==='simulated'?'simulated':e.pushed_at||e.status==='pushed'?'sent':e.status==='pushing'?'sending':'not_sent');}
 function pushDates(e){
@@ -125,7 +129,7 @@ function renderEventDetails(e){
   return `<article class="event-review">
     <div class="review-heading"><strong>${esc(emp.name||'员工资料不可用')}</strong><span class="badge">${esc(e.event_type==='birthday'?'生日':e.event_type==='anniversary'?'入职周年':e.event_type)}</span>${badge(ReviewStatus.of(e),ReviewStatus.labels)}<span class="meta">${esc(e.event_date)}${e.years!=null?' · '+esc(e.years)+(e.event_type==='birthday'?' 岁':' 周年'):''}</span></div>
     <div class="review-layout"><div class="review-information">
-      <dl class="review-facts"><div><dt>工号</dt><dd>${esc(emp.employee_no||'未填写')}</dd></div><div><dt>部门</dt><dd>${esc(emp.department||'未填写')}</dd></div><div><dt>入职日期</dt><dd>${esc(emp.join_date||'未填写')}</dd></div><div><dt>生日</dt><dd>${esc(emp.birth_date_display||emp.birth_date||'未填写')}</dd></div><div><dt>入职周年数 · 自动计算</dt><dd>${esc(anniversaryText(e.anniversary_years))}</dd></div><div><dt>员工 ID</dt><dd>${esc(emp.id??'未记录')}</dd></div><div><dt>是否推送</dt><dd>${badge(deliveryState(e),DELIVERY)}</dd></div><div class="full"><dt>飞书 open_id</dt><dd class="review-open-id">${esc(openId(emp)||'未填写')}</dd></div><div class="full"><dt>推送日期</dt><dd class="audit-stacked">${pushDates(e)}</dd></div></dl>
+      <dl class="review-facts"><div><dt>工号</dt><dd>${esc(emp.employee_no||'未填写')}</dd></div><div><dt>部门</dt><dd>${esc(emp.department||'未填写')}</dd></div><div><dt>入职日期</dt><dd>${esc(emp.join_date||'未填写')}</dd></div><div><dt>生日</dt><dd>${esc(birthdayText(emp.birth_date_display||emp.birth_date)||'未填写')}</dd></div><div><dt>入职周年数 · 自动计算</dt><dd>${esc(anniversaryText(e.anniversary_years))}</dd></div><div><dt>员工 ID</dt><dd>${esc(emp.id??'未记录')}</dd></div><div><dt>是否推送</dt><dd>${badge(deliveryState(e),DELIVERY)}</dd></div><div class="full"><dt>飞书 open_id</dt><dd class="review-open-id">${esc(openId(emp)||'未填写')}</dd></div><div class="full"><dt>推送日期</dt><dd class="audit-stacked">${pushDates(e)}</dd></div></dl>
       <p class="review-instruction">${esc(instruction||'可查看海报和推送记录。')}</p>
       ${e.exception_hint?`<p class="error">异常提醒：${esc(e.exception_hint)}</p>`:''}
       ${e.last_error||emp.identity_error?`<details class="review-error"><summary>技术详情</summary><p class="error">${esc([e.last_error,emp.identity_error].filter(Boolean).join('\n'))}</p></details>`:''}
@@ -138,18 +142,21 @@ function renderEventDetails(e){
 }
 async function loadEvents(quiet=false){
   if(quiet&&RowSelection.isDragging($('#events')))return;
-  const seq=++eventLoad;eventLoading=true;$('#events-loading').textContent='正在刷新…';
+  const seq=++eventLoad;eventLoading=true;updateBusy();$('#events-loading').textContent='正在刷新…';
   try{
     const scope=$('#scope').value;
-    const results=await Promise.allSettled([api('/api/events?scope='+encodeURIComponent(scope==='pending'?'all':scope)),api('/api/employees?keyword=&only_active=false')]);
+    const results=await Promise.allSettled([api('/api/events?scope='+encodeURIComponent(scope==='pending'?'all':scope)+(REVIEW_EMPLOYEE_ID==null?'':'&employee_id='+encodeURIComponent(REVIEW_EMPLOYEE_ID))),api('/api/employees?keyword=&only_active=false')]);
     if(seq!==eventLoad||(quiet&&RowSelection.isDragging($('#events'))))return;if(results[0].status==='rejected')throw results[0].reason;if(!Array.isArray(results[0].value))throw new Error('事件列表格式错误');
     const employees=results[1].status==='fulfilled'&&Array.isArray(results[1].value)?results[1].value:null;
+    EVENT_PEOPLE=employees;
     if(!employees&&!quiet)report('event','员工核验信息加载失败',['当前海报仅供查看，请刷新后再执行确认或推送。'],true);
     let events=results[0].value.map(e=>({...e,employee:employees?.find(emp=>sameId(emp.id,e.employee_id??e.employee?.id))||{...e.employee,active:0,identity_status:'pending'}}));
     if(scope==='pending')events=events.filter(e=>ReviewStatus.of(e)!=='sent');
-    ALL_EVENTS=events;refreshFilterOptions($('#event-department'),events.map(e=>e.employee?.department));renderEvents();
+    ALL_EVENTS=events;
+    if(reviewChooseState&&REVIEW_EMPLOYEE_ID!=null){$('#event-status').value=ReviewSearch.preferredState(events,REVIEW_EMPLOYEE_ID);reviewChooseState=false;}
+    refreshFilterOptions($('#event-department'),events.map(e=>e.employee?.department));renderEvents();
     $('#events-loading').textContent=employees?'已更新 '+new Date().toLocaleTimeString('zh-CN'):'核验信息不可用，操作已锁定';
-  }catch(error){if(seq===eventLoad){ALL_EVENTS=[];EVENTS=[];EVENT_SELECTED.clear();$('#events').innerHTML='<div class="panel empty">加载失败，请检查管理口令或网络后刷新。</div>';$('#events-loading').textContent='加载失败';if(!quiet)report('event','海报加载失败',[error.message],true);}}
+  }catch(error){if(seq===eventLoad){ALL_EVENTS=[];EVENTS=[];EVENT_PEOPLE=null;EVENT_SELECTED.clear();renderReviewPeople();$('#events').innerHTML='<div class="panel empty">加载失败，请检查管理口令或网络后刷新。</div>';$('#events-loading').textContent='加载失败';if(!quiet)report('event','海报加载失败',[error.message],true);}}
   finally{if(seq===eventLoad){eventLoading=false;updateBusy();}}
 }
 
@@ -159,24 +166,72 @@ function refreshFilterOptions(select,values){
 }
 function renderEvents(){
   const kw=$('#event-search').value.trim().toLowerCase(),state=$('#event-status').value,type=$('#event-type').value,dept=$('#event-department').value,issues=$('#event-issues').value;
-  EVENTS=ALL_EVENTS.filter(e=>ReviewStatus.of(e)===state&&(!type||e.event_type===type)&&(!dept||e.employee?.department===dept)&&(!issues||(issues==='issues'?Boolean(e.exception_hint):!e.exception_hint))&&(!kw||[e.employee?.name,e.employee?.employee_no,e.employee?.department,e.employee?.id,openId(e.employee)].some(v=>String(v||'').toLowerCase().includes(kw))));
+  EVENTS=ReviewSearch.events(ALL_EVENTS,{employeeId:REVIEW_EMPLOYEE_ID,keyword:kw,state,type,department:dept,issues});
   const direction=$('#event-sort').value==='desc'?-1:1;
   EVENTS.sort((a,b)=>direction*String(a.event_date).localeCompare(String(b.event_date)));
   EVENT_SELECTED=new Set([...EVENT_SELECTED].filter(id=>EVENTS.some(e=>sameId(e.id,id))));
   $('#evsum').textContent=EVENTS.length+' 条记录';
   $('#events').innerHTML='<div class="table-wrap audit-table-wrap"><table class="data-table audit-table"><thead><tr><th class="check-col"><input type="checkbox" id="event-all" aria-label="选择当前筛选的全部海报"></th><th class="audit-person">姓名</th><th>工号</th><th>部门</th><th>入职日期</th><th>生日</th><th title="根据入职日期自动计算，截至本条贺卡日期已满的周年数，无需导入">入职周年数 ⓘ</th><th>飞书 open_id</th><th>贺卡 / 日期</th><th>推送状态</th><th>推送日期</th><th>异常提醒</th><th>海报</th><th>操作</th></tr></thead><tbody>'+EVENTS.map((e,i)=>{
     const card=previewCard(e),url=card&&fileURL(card.url),emp=e.employee||{};
-    return `<tr class="${EVENT_SELECTED.has(String(e.id))?'is-selected':''}"><td class="selection-cell"><input type="checkbox" aria-describedby="event-selection-help" data-event-check="${esc(e.id)}" aria-label="选择${esc(emp.name)}的海报" ${EVENT_SELECTED.has(String(e.id))?'checked':''}></td><td class="audit-person"><button class="person-link" data-action="detail" data-id="${esc(e.id)}">${esc(emp.name||'未知员工')}</button><small class="muted">员工 ID：${esc(emp.id??'—')}</small></td><td>${esc(emp.employee_no||'—')}</td><td>${esc(emp.department||'—')}</td><td>${esc(emp.join_date||'未填写')}</td><td>${esc(emp.birth_date_display||emp.birth_date||'未填写')}</td><td title="截至 ${esc(e.event_date)}，由入职日期自动计算">${esc(anniversaryText(e.anniversary_years))}</td><td class="id-cell" title="${esc(openId(emp))}">${esc(openId(emp)||'未绑定')}</td><td class="audit-stacked"><span class="type-tag ${e.event_type==='birthday'?'birthday':'anniversary'}">${e.event_type==='birthday'?'生日':'入职周年'}</span><small class="muted">${esc(e.event_date)}</small></td><td>${badge(ReviewStatus.of(e),ReviewStatus.labels)}</td><td class="audit-stacked audit-push-dates">${pushDates(e)}</td><td class="audit-notice">${ReviewStatus.note(e)?`<button class="audit-notice-link" data-action="detail" data-id="${esc(e.id)}" title="${esc(ReviewStatus.note(e))}">${esc(ReviewStatus.note(e))}</button>`:'<span class="muted">—</span>'}</td><td class="audit-poster-cell">${url?`<button class="audit-poster-image" data-zoom="${esc(url)}" aria-label="放大${esc(emp.name)}的海报"><img src="${esc(url)}" alt="${esc(emp.name)}海报缩略图" loading="lazy"></button>`:'<span class="muted" aria-label="尚无可用海报">—</span>'}</td><td class="row-actions"><div class="bar">${eventButton('detail',e.id,'核查',true)}${canConfirm(e)?eventButton('confirm',e.id,'确认',true):canPush(e)?eventButton('push',e.id,'推送',true):''}</div></td></tr>`;
+    return `<tr class="${EVENT_SELECTED.has(String(e.id))?'is-selected':''}"><td class="selection-cell"><input type="checkbox" aria-describedby="event-selection-help" data-event-check="${esc(e.id)}" aria-label="选择${esc(emp.name)}的海报" ${EVENT_SELECTED.has(String(e.id))?'checked':''}></td><td class="audit-person"><button class="person-link" data-action="detail" data-id="${esc(e.id)}">${esc(emp.name||'未知员工')}</button><small class="muted">员工 ID：${esc(emp.id??'—')}</small></td><td>${esc(emp.employee_no||'—')}</td><td>${esc(emp.department||'—')}</td><td>${esc(emp.join_date||'未填写')}</td><td>${esc(birthdayText(emp.birth_date_display||emp.birth_date)||'未填写')}</td><td title="截至 ${esc(e.event_date)}，由入职日期自动计算">${esc(anniversaryText(e.anniversary_years))}</td><td class="id-cell" title="${esc(openId(emp))}">${esc(openId(emp)||'未绑定')}</td><td class="audit-stacked"><span class="type-tag ${e.event_type==='birthday'?'birthday':'anniversary'}">${e.event_type==='birthday'?'生日':'入职周年'}</span><small class="muted">${esc(e.event_date)}</small></td><td>${badge(ReviewStatus.of(e),ReviewStatus.labels)}</td><td class="audit-stacked audit-push-dates">${pushDates(e)}</td><td class="audit-notice">${ReviewStatus.note(e)?`<button class="audit-notice-link" data-action="detail" data-id="${esc(e.id)}" title="${esc(ReviewStatus.note(e))}">${esc(ReviewStatus.note(e))}</button>`:'<span class="muted">—</span>'}</td><td class="audit-poster-cell">${url?`<button class="audit-poster-image" data-zoom="${esc(url)}" aria-label="放大${esc(emp.name)}的海报"><img src="${esc(url)}" alt="${esc(emp.name)}海报缩略图" loading="lazy"></button>`:'<span class="muted" aria-label="尚无可用海报">—</span>'}</td><td class="row-actions"><div class="bar">${eventButton('detail',e.id,'核查',true)}${canConfirm(e)?eventButton('confirm',e.id,'确认',true):canPush(e)?eventButton('push',e.id,'推送',true):''}</div></td></tr>`;
   }).join('')+(EVENTS.length?'':'<tr><td colspan="14" class="empty">当前筛选下暂无海报</td></tr>')+'</tbody></table></div>';
-  RowSelection.refresh($('#events'));updateEventSelection();
+  RowSelection.refresh($('#events'));renderReviewPeople();updateEventSelection();
 }
 function updateEventSelection(){
   const chosen=EVENTS.filter(e=>EVENT_SELECTED.has(String(e.id)));
   $('#event-selected-count').textContent='已选 '+chosen.length+' 条';
-  for(const [id,predicate] of [['confirm-all',canConfirm],['regenerate-selected',canRegen],['skip-selected',canSkip]])$('#'+id).disabled=BUSY.has('events')||!chosen.some(predicate);
+  for(const [id,predicate] of [['confirm-all',canConfirm],['regenerate-selected',canRegen],['skip-selected',canSkip]])$('#'+id).disabled=BUSY.has('events')||eventLoading||!chosen.some(predicate);
   $('#clear-events').disabled=BUSY.has('events')||!chosen.length;
   const all=$('#event-all');if(all){all.checked=EVENTS.length>0&&chosen.length===EVENTS.length;all.indeterminate=chosen.length>0&&chosen.length<EVENTS.length;}
 }
+function renderReviewPeople(){
+  const box=$('#review-people'),keyword=$('#event-search').value.trim();
+  box.hidden=!keyword&&REVIEW_EMPLOYEE_ID==null;
+  if(box.hidden){box.replaceChildren();reviewPeopleMarkup=null;return;}
+  const show=markup=>{if(markup!==reviewPeopleMarkup){box.innerHTML=markup;reviewPeopleMarkup=markup;}};
+  if(REVIEW_EMPLOYEE_ID!=null){
+    const emp=EVENT_PEOPLE?.find(row=>sameId(row.id,REVIEW_EMPLOYEE_ID));
+    const counts=Object.keys(ReviewStatus.labels).map(state=>{
+      const count=ALL_EVENTS.filter(row=>sameId(row.employee_id??row.employee?.id,REVIEW_EMPLOYEE_ID)&&ReviewStatus.of(row)===state).length;
+      return `<button type="button" data-review-state="${state}" aria-pressed="${$('#event-status').value===state}">${esc(ReviewStatus.labels[state])} ${count}</button>`;
+    }).join('');
+    show(`<div class="review-person-focus"><strong>${esc(emp?.name||'员工资料不可用')}</strong><span>${esc(emp?.department||'未填部门')}</span><span>工号 ${esc(emp?.employee_no||'—')}</span><span class="staff-open-id" title="${esc(openId(emp))}">${esc(openId(emp)||'未绑定 open_id')}</span><span class="spacer"></span><button type="button" data-generate-person="${esc(REVIEW_EMPLOYEE_ID)}" data-locked="${!isActive(emp)}" ${isActive(emp)?'':'disabled'}>生成今日贺卡</button><button type="button" data-clear-person>清除人员</button></div><div class="review-person-states">${counts}</div>`);
+  }else if(EVENT_PEOPLE===null){
+    show('<p role="status">员工名单尚未加载，请刷新后重试。</p>');
+  }else{
+    const matches=ReviewSearch.people(EVENT_PEOPLE,keyword);
+    show(`<p class="review-search-count" role="status">${matches.length?'找到 '+matches.length+' 位员工，点击姓名查看个人贺卡'+(matches.length>8?'（显示前 8 位，请补充关键词）':''):'没有匹配的员工'}</p><div class="review-person-matches">`+matches.slice(0,8).map(emp=>`<button type="button" class="review-person-choice" data-review-person="${esc(emp.id)}"><strong>${esc(emp.name)}</strong><span>${esc(emp.department||'未填部门')} · ${esc(emp.employee_no||'未填工号')}${isActive(emp)?'':' · 已离职'}</span><span class="staff-open-id" title="${esc(openId(emp))}">${esc(openId(emp)||'未绑定 open_id')}</span></button>`).join('')+'</div>');
+  }
+  for(const button of box.querySelectorAll('button'))button.disabled=BUSY.has('events')||eventLoading||button.dataset.locked==='true';
+}
+async function selectReviewPerson(id){
+  const emp=EVENT_PEOPLE?.find(row=>sameId(row.id,id));if(!emp)return;
+  REVIEW_EMPLOYEE_ID=emp.id;reviewChooseState=true;EVENT_SELECTED.clear();
+  $('#event-search').value=emp.name;$('#scope').value='all';$('#event-status').value='pending';
+  for(const key of ['event-type','event-department','event-issues'])$('#'+key).value='';
+  clearDeliveryFilter();ALL_EVENTS=[];renderEvents();await loadEvents();
+}
+$('#review-people').addEventListener('click',async event=>{
+  const button=event.target.closest('button');if(!button||button.disabled)return;
+  if(button.dataset.reviewPerson){await selectReviewPerson(button.dataset.reviewPerson);return;}
+  if(button.hasAttribute('data-clear-person')){
+    REVIEW_EMPLOYEE_ID=null;reviewChooseState=false;$('#event-search').value='';EVENT_SELECTED.clear();ALL_EVENTS=[];renderEvents();await loadEvents();return;
+  }
+  if(button.dataset.reviewState){$('#event-status').value=button.dataset.reviewState;clearDeliveryFilter();renderEvents();return;}
+  if(button.dataset.generatePerson){
+    const employeeId=button.dataset.generatePerson;
+    await busy('events','event',async()=>{
+      const result=requireOK(await post('/api/employees/'+encodeURIComponent(employeeId)+'/generate-today',{}));
+      if(!sameId(result.employee_id,employeeId))throw new Error('返回的员工不一致，请刷新后重试');
+      if(result.total)generationTask=result.task_id||generationTask;
+      report('event',result.total?'已提交个人贺卡生成':'个人贺卡检查完成',[result.msg]);
+      if(sameId(REVIEW_EMPLOYEE_ID,employeeId)){
+        $('#scope').value='all';$('#event-type').value='';$('#event-department').value='';$('#event-issues').value='';clearDeliveryFilter();reviewChooseState=true;
+      }
+      await loadEvents();
+    });
+  }
+});
 for(const id of ['event-type','event-department','event-sort','event-issues'])$('#'+id).onchange=renderEvents;
 function clearDeliveryFilter(){
   $('#event-delivery').value='';$('#clear-delivery-filter').hidden=true;
@@ -188,7 +243,10 @@ $('#event-delivery').onchange=()=>{
   if(result==='sent'&&$('#scope').value==='pending'){$('#scope').value='all';loadEvents();}else renderEvents();
 };
 $('#clear-delivery-filter').onclick=()=>{clearDeliveryFilter();$('#event-status').value='pending';renderEvents();};
-$('#event-search').oninput=renderEvents;
+$('#event-search').oninput=()=>{
+  const selected=REVIEW_EMPLOYEE_ID!=null;REVIEW_EMPLOYEE_ID=null;reviewChooseState=false;EVENT_SELECTED.clear();
+  if(selected){ALL_EVENTS=[];renderEvents();loadEvents();}else renderEvents();
+};
 function showEventDetail(e){$('#event-detail').innerHTML=renderEventDetails(e);if(!$('#event-detail-dialog').open)$('#event-detail-dialog').showModal();}
 async function ensureSelected(e){
   if(selectedCard(e))return e;
@@ -285,7 +343,7 @@ function renderStaff(){
   $('#staff-filter-hint').textContent=result.hint;$('#staff-filter-hint').hidden=!result.hint;
   STAFF_SELECTED=new Set([...STAFF_SELECTED].filter(id=>STAFF.some(e=>sameId(e.id,id))));
   $('#staff-count').textContent=STAFF.length+' 条记录';
-  $('#staff').innerHTML='<div class="table-wrap"><table class="data-table"><thead><tr><th class="check-col"><input type="checkbox" id="staff-all" aria-label="选择当前筛选的全部员工"></th><th>姓名</th><th>部门</th><th>工号</th><th>入职日期</th><th>出生年月</th><th>在职状态</th><th>操作</th></tr></thead><tbody>'+STAFF.map((e,i)=>`<tr class="${STAFF_SELECTED.has(String(e.id))?'is-selected':''}"><td class="selection-cell"><input type="checkbox" aria-describedby="staff-selection-help" data-employee-check="${esc(e.id)}" aria-label="选择${esc(e.name)}" ${STAFF_SELECTED.has(String(e.id))?'checked':''}></td><td><button class="person-link" data-staff-action="edit" data-id="${esc(e.id)}"><span class="avatar tone-${i%4}">${esc(String(e.name||'?').slice(-1))}</span>${esc(e.name)}</button></td><td>${esc(e.department||'—')}</td><td class="muted">${esc(e.employee_no||'—')}</td><td>${esc(e.join_date||'—')}</td><td>${esc(e.birth_date_display||e.birth_date||'—')}</td><td><span class="status-dot ${isActive(e)?'active':''}"></span>${isActive(e)?'在职':'离职'}</td><td class="row-actions"><button data-staff-action="edit" data-id="${esc(e.id)}">编辑员工资料</button></td></tr>`).join('')+(STAFF.length?'':'<tr><td colspan="8" class="empty">'+(ALL_STAFF.length?'没有符合筛选条件的员工':'暂无员工，请新增或导入真实员工名单')+'</td></tr>')+'</tbody></table></div>';
+  $('#staff').innerHTML='<div class="table-wrap"><table class="data-table"><thead><tr><th class="check-col"><input type="checkbox" id="staff-all" aria-label="选择当前筛选的全部员工"></th><th>姓名</th><th>部门</th><th>工号</th><th>入职日期</th><th>生日（月日）</th><th>在职状态</th><th>用户 ID（open_id）</th><th>操作</th></tr></thead><tbody>'+STAFF.map((e,i)=>`<tr class="${STAFF_SELECTED.has(String(e.id))?'is-selected':''}"><td class="selection-cell"><input type="checkbox" aria-describedby="staff-selection-help" data-employee-check="${esc(e.id)}" aria-label="选择${esc(e.name)}" ${STAFF_SELECTED.has(String(e.id))?'checked':''}></td><td><button class="person-link" data-staff-action="edit" data-id="${esc(e.id)}"><span class="avatar tone-${i%4}">${esc(String(e.name||'?').slice(-1))}</span>${esc(e.name)}</button></td><td>${esc(e.department||'—')}</td><td class="muted">${esc(e.employee_no||'—')}</td><td>${esc(e.join_date||'—')}</td><td>${esc(birthdayText(e.birth_date_display||e.birth_date)||'—')}</td><td><span class="status-dot ${isActive(e)?'active':''}"></span>${isActive(e)?'在职':'离职'}</td><td><span class="staff-open-id" title="${esc(openId(e))}">${esc(openId(e)||'未绑定')}</span></td><td class="row-actions"><button data-staff-action="edit" data-id="${esc(e.id)}">编辑员工资料</button></td></tr>`).join('')+(STAFF.length?'':'<tr><td colspan="9" class="empty">'+(ALL_STAFF.length?'没有符合筛选条件的员工':'暂无员工，请新增或导入真实员工名单')+'</td></tr>')+'</tbody></table></div>';
   RowSelection.refresh($('#staff'));updateBusy();
 }
 async function loadStaff(){
@@ -293,23 +351,93 @@ async function loadStaff(){
   try{const rows=await api('/api/employees?only_active=false');if(seq!==staffLoad)return;if(!Array.isArray(rows))throw new Error('员工列表格式错误');ALL_STAFF=rows;refreshFilterOptions($('#staff-department'),rows.map(e=>e.department));renderStaff();}
   catch(error){if(seq===staffLoad){ALL_STAFF=[];STAFF_SELECTED.clear();renderStaff();report('staff','员工加载失败',[error.message],true);}}
 }
+let fieldMappingLoad=0;
+function renderFieldMapping(result){
+  const states={available:'可读取',not_returned:'未返回字段',empty:'值为空',invalid:'格式无效',unreadable:'读取失败',unavailable:'无可读取的对应字段'};
+  $('#field-mapping-context').textContent=`当前应用：${result.app_id||'未配置'} · 本地在职 ${result.local_total} 人`+(result.remote_total==null?'':` · 飞书检查 ${result.remote_total} 人`)+(result.checked_at?` · ${result.checked_at}`:'');
+  $('#field-mapping-table').innerHTML='<table class="data-table"><thead><tr><th>后台字段</th><th>飞书字段来源</th><th>本地已填</th><th>飞书检查结果</th><th>处理方式</th></tr></thead><tbody>'+(result.fields||[]).map(field=>{
+    const counts=field.remote;
+    const status=counts?(result.remote_total===0?'授权范围未返回员工':Object.entries(states).filter(([key])=>counts[key]>0).map(([key,label])=>`${label} ${counts[key]} 人`).join('；')):(result.error?'未完成检查':'尚未检查');
+    return `<tr><td>${esc(field.label)}</td><td>${esc(field.source)}</td><td>${esc(field.local_filled)} / ${esc(result.local_total)}</td><td>${esc(status)}</td><td>${esc(field.hint)}</td></tr>`;
+  }).join('')+'</tbody></table>';
+  $('#field-mapping-message').textContent=[result.error,...(result.warnings||[])].filter(Boolean).join(' ');
+}
+async function loadFieldMapping(check=false){
+  const seq=++fieldMappingLoad;
+  $('#field-mapping-message').textContent=check?'正在读取飞书字段，不会修改名单或发送消息…':'正在读取本地字段统计…';
+  try{
+    const result=await (check?post('/api/feishu/fields/check',{}):api('/api/feishu/fields'));
+    if(seq!==fieldMappingLoad)return;
+    renderFieldMapping(result);
+  }catch(error){if(seq===fieldMappingLoad){$('#field-mapping-table').replaceChildren();$('#field-mapping-message').textContent='字段检查未完成：'+error.message;}}
+}
+$('#field-mapping').ontoggle=()=>{if($('#field-mapping').open)busy('fields','staff',()=>loadFieldMapping());};
+$('#check-field-mapping').onclick=()=>busy('fields','staff',()=>loadFieldMapping(true));
 $('#kw').oninput=()=>{clearTimeout(staffTimer);staffTimer=setTimeout(renderStaff,150);};$('#staff-filter').onchange=()=>{STAFF_SELECTED.clear();renderStaff();};
 for(const id of ['staff-department','staff-join-from','staff-join-to','staff-birth-from','staff-birth-to'])$('#'+id).onchange=renderStaff;
 for(const id of ['staff-birth-from','staff-birth-to'])for(let month=1;month<=12;month++)$('#'+id).add(new Option(month+' 月',String(month)));
 $('#staff-reset-filters').onclick=()=>{for(const id of ['kw','staff-department','staff-join-from','staff-join-to','staff-birth-from','staff-birth-to'])$('#'+id).value='';$('#staff-filter').value='active';STAFF_SELECTED.clear();renderStaff();};
 $('#clear-selection').onclick=()=>{STAFF_SELECTED.clear();renderStaff();};
 function editEmployee(emp=null){
-  EDIT_EMPLOYEE=emp?clone(emp):null;$('#employee-form').reset();$('#employee-title').textContent=emp?'编辑员工资料':'新增员工';$('#employee-error').textContent='';
-  for(const key of ['name','department','employee_no','join_date','birth_date'])$('#employee-form').elements.namedItem(key).value=emp?.[key]??'';
+  setEmployeeSaving(false);EDIT_EMPLOYEE=emp?clone(emp):null;$('#employee-form').reset();$('#employee-title').textContent=emp?'编辑员工资料':'新增员工';$('#employee-error').textContent='';
+  for(const key of ['name','department','employee_no','join_date','birth_date','feishu_open_id'])$('#employee-form').elements.namedItem(key).value=emp?.[key]??'';
+  $('#employee-form').elements.namedItem('birth_date').value=birthdayText(emp?.birth_date);
   $('#employee-form').elements.namedItem('active').value=String(emp?.active??1);
   $('#employee-dialog').showModal();$('#employee-form').elements.namedItem('name').focus();
 }
 $('#add-employee').onclick=()=>editEmployee();
-$('#employee-form').onsubmit=e=>{e.preventDefault();if(!e.target.reportValidity())return;busy('staff','staff',async()=>{
-  const payload={};for(const key of ['name','department','employee_no','join_date','birth_date'])payload[key]=$('#employee-form').elements.namedItem(key).value.trim();
-  if(!payload.name||!payload.department){$('#employee-error').textContent='姓名和部门不能为空。';return;}if(EDIT_EMPLOYEE)payload.id=EDIT_EMPLOYEE.id;payload.active=Number($('#employee-form').elements.namedItem('active').value);
-  try{const r=requireOK(await post('/api/employees',payload));$('#employee-dialog').close();report('staff','员工资料已保存',[`${payload.name} ｜ ${payload.department}`,...bindingDetails(r)],Boolean(r.binding?.errors?.length));await loadStaff();}catch(error){$('#employee-error').textContent=error.message;throw error;}
-});};
+let employeeSaving=false;
+function setEmployeeSaving(saving){
+  employeeSaving=saving;
+  $('#employee-save').textContent=saving?'保存中…':'保存资料';
+  $('#employee-save-state').textContent=saving?'正在保存资料…':'';
+  $('#employee-save-state').hidden=!saving;
+  $('#employee-form').setAttribute('aria-busy',String(saving));
+}
+$('#employee-dialog').addEventListener('close',()=>{if(employeeSaving)toast('保存仍在处理，完成后会提示结果。');});
+$('#employee-form').onsubmit=e=>{
+  e.preventDefault();if(!e.target.reportValidity())return;
+  return busy('staff','staff',async()=>{
+    const payload={};for(const key of ['name','department','employee_no','join_date','birth_date','feishu_open_id'])payload[key]=$('#employee-form').elements.namedItem(key).value.trim();
+    if(EDIT_EMPLOYEE&&payload.birth_date===birthdayText(EDIT_EMPLOYEE.birth_date))payload.birth_date=EDIT_EMPLOYEE.birth_date??'';
+    if(!payload.name||!payload.department){$('#employee-error').textContent='姓名和部门不能为空。';return;}
+    if(EDIT_EMPLOYEE)payload.id=EDIT_EMPLOYEE.id;payload.active=Number($('#employee-form').elements.namedItem('active').value);
+    setEmployeeSaving(true);$('#employee-error').textContent='';
+    try{
+      const result=requireOK(await post('/api/employees?defer_binding=true',payload));
+      setEmployeeSaving(false);$('#employee-dialog').close();toast('员工资料已保存');
+      report('staff','员工资料已保存',[`${payload.name} ｜ ${payload.department}`,...bindingDetails(result)],Boolean(result.binding?.errors?.length)||result.binding?.status==='failed');
+      trackEmployeeBinding(result.binding);await loadStaff();
+    }catch(error){
+      $('#employee-error').textContent=error.message;throw error;
+    }finally{setEmployeeSaving(false);}
+  });
+};
+const EMPLOYEE_BINDING_TASKS=new Map();let pollingEmployeeBindings=false;
+function trackEmployeeBinding(binding){
+  if(binding?.status==='running'&&binding.task_id){EMPLOYEE_BINDING_TASKS.set(binding.task_id,0);pollEmployeeBindings();}
+}
+async function pollEmployeeBindings(){
+  if(pollingEmployeeBindings||!EMPLOYEE_BINDING_TASKS.size)return;
+  pollingEmployeeBindings=true;let changed=false;
+  try{
+    for(const id of [...EMPLOYEE_BINDING_TASKS.keys()]){
+      try{
+        const result=await api('/api/binding-tasks/'+encodeURIComponent(id));
+        if(result.status==='running')continue;
+        EMPLOYEE_BINDING_TASKS.delete(id);changed=true;
+        const failed=result.status==='failed'||Boolean(result.errors?.length)||result.pending>0;
+        report('staff',failed?'资料已保存，飞书对应待处理':'飞书对应已完成',bindingDetails({binding:result}),failed);
+      }catch(error){
+        const attempts=(EMPLOYEE_BINDING_TASKS.get(id)||0)+1;
+        if(attempts>=3){EMPLOYEE_BINDING_TASKS.delete(id);report('staff','资料已保存，暂未取得飞书对应结果',[error.message,'请刷新员工资料或从飞书同步后查看结果。'],true);}
+        else EMPLOYEE_BINDING_TASKS.set(id,attempts);
+      }
+    }
+  }finally{pollingEmployeeBindings=false;}
+  if(changed&&TAB==='staff')await loadStaff();
+}
+setInterval(pollEmployeeBindings,3000);
 function bindingDetails(result){const binding=result.binding;return binding?[...(binding.msg?[binding.msg]:[]),...(binding.errors||[]).map(e=>`${e.name||'员工'}：${e.msg}`)]:[];}
 async function disableEmployees(list){
   const active=list.filter(isActive);if(!active.length)throw new Error('请选择在职员工');

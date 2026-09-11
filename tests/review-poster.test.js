@@ -14,6 +14,8 @@ function workspace(){
     },querySelectorAll:()=>[],addEventListener(){}},
     window:{addEventListener(){}},localStorage:{getItem:()=>null},
     Option:function(){},setInterval(){},RowSelection:{attach(){}},
+    StaffFilters:require('../app/static/staff-filters.js'),
+    ReviewSearch:require('../app/static/review-search.js'),
     ReviewStatus:require('../app/static/review-status.js')});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../app/static/workspace.js'),'utf8'),context);
   return context;

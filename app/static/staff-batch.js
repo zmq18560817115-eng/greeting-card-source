@@ -1,5 +1,5 @@
 'use strict';
-const BATCH_COLUMNS={name:'姓名',department:'部门',employee_no:'工号',join_date:'入职日期',birth_date:'出生年月',active:'在职状态'};
+const BATCH_COLUMNS={name:'姓名',department:'部门',employee_no:'工号',join_date:'入职日期',birth_date:'生日（月日）',active:'在职状态',feishu_open_id:'用户 ID（open_id）'};
 let BATCH_ORIGINAL=[],BATCH_DRAFT=[];
 function batchChanges(){
   return BATCH_DRAFT.map((row,index)=>{
@@ -7,6 +7,7 @@ function batchChanges(){
     for(const key of Object.keys(BATCH_COLUMNS)){
       const value=key==='active'?Number(row[key]):String(row[key]??'').trim();
       const before=key==='active'?Number(original[key]):String(original[key]??'').trim();
+      if(key==='birth_date'&&birthdayText(value)===birthdayText(before))continue;
       if(value!==before)changes[key]=value;
     }
     return {id:original.id,original:Object.fromEntries(Object.keys(BATCH_COLUMNS).map(k=>[k,original[k]??null])),changes};
@@ -22,7 +23,8 @@ function renderBatchTable(){
   $('#staff-batch-table').innerHTML='<table class="data-table"><thead><tr><th>序号</th>'+Object.values(BATCH_COLUMNS).map(label=>`<th>${esc(label)}</th>`).join('')+'</tr></thead><tbody>'+BATCH_DRAFT.map((row,index)=>`<tr><td>${index+1}</td>`+Object.entries(BATCH_COLUMNS).map(([key,label])=>{
     const attr=`data-batch-index="${index}" data-batch-key="${key}" aria-label="第 ${index+1} 行${label}"`;
     if(key==='active')return `<td><select ${attr}><option value="1" ${Number(row.active)===1?'selected':''}>在职</option><option value="0" ${Number(row.active)===0?'selected':''}>离职</option></select></td>`;
-    return `<td><input ${attr} type="${key.endsWith('_date')?'date':'text'}" value="${esc(row[key]??'')}" ${['name','department'].includes(key)?'required':''}></td>`;
+    if(key==='feishu_open_id')return `<td><input ${attr} class="open-id-input" type="text" value="${esc(row[key]??'')}" placeholder="ou_…" pattern="ou_[A-Za-z0-9_]+" spellcheck="false" autocomplete="off"></td>`;
+    return `<td><input ${attr} type="${key==='join_date'?'date':'text'}" value="${esc(key==='birth_date'?birthdayText(row[key]):row[key]??'')}" ${key==='birth_date'?'placeholder="09-11（仅月日）"':''} ${['name','department'].includes(key)?'required':''}></td>`;
   }).join('')+'</tr>').join('')+'</tbody></table>';
   updateBatchDirty();
 }
@@ -39,7 +41,8 @@ $('#staff-batch-field').onchange=()=>{
   const key=$('#staff-batch-field').value,status=key==='active';
   $('#staff-batch-value').hidden=status;$('#staff-batch-value').disabled=status;
   $('#staff-batch-active').hidden=!status;$('#staff-batch-active').disabled=!status;
-  $('#staff-batch-value').type=key.endsWith('_date')?'date':'text';$('#staff-batch-value').value='';
+  $('#staff-batch-value').type=key==='join_date'?'date':'text';$('#staff-batch-value').value='';
+  $('#staff-batch-value').placeholder=key==='birth_date'?'09-11（仅月日）':'';
 };
 $('#staff-batch-table').addEventListener('input',e=>{
   const key=e.target.dataset.batchKey,index=Number(e.target.dataset.batchIndex);if(!key||!BATCH_DRAFT[index])return;
@@ -58,13 +61,13 @@ $('#staff-batch-form').onsubmit=e=>{
   const updates=batchChanges();if(!updates.length)return;
   busy('staff','staff',async()=>{
     try{
-      const result=requireOK(await post('/api/employees/batch-update',{updates}));
+      const result=requireOK(await post('/api/employees/batch-update?defer_binding=true',{updates}));
       $('#staff-batch-dialog').close();STAFF_SELECTED.clear();
       report('staff',`批量更正完成：已更新 ${result.updated} 人`,[
         ...updates.map(item=>`${item.original.name}：${Object.keys(item.changes).map(k=>BATCH_COLUMNS[k]).join('、')}`),
         ...bindingDetails(result)
-      ],Boolean(result.binding?.errors?.length));
-      await loadStaff();
+      ],Boolean(result.binding?.errors?.length)||result.binding?.status==='failed');
+      trackEmployeeBinding(result.binding);await loadStaff();
     }catch(error){$('#staff-batch-error').textContent=error.message;}
   });
 };

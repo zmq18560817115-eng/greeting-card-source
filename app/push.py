@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import employees, feishu
 from .db import execute, now, query, tx
+from .dates import match_employee, parse_date
 from .pipeline import employee_snapshot
 from .settings import DRY_RUN, MAX_PUSH_ATTEMPTS
 
@@ -19,6 +20,13 @@ def _review_data(conn, event):
     if not row or not row["active"]:
         raise ValueError("员工已离职或停用，不能发送")
     emp = dict(row)
+    day = parse_date(event.get("event_date"))
+    hit = next((item for item in match_employee(emp, day, day)
+                if item["event_type"] == event["event_type"]), None) if day else None
+    if not hit:
+        raise ValueError("贺卡日期与员工生日月日或完整入职日期不符，请跳过旧事件并重新扫描")
+    if event.get("years") != hit["years"]:
+        raise ValueError("贺卡仍使用旧年龄或周年数，请重新生成并审核；生日不计算年龄")
     card_row = conn.execute("SELECT * FROM cards WHERE id=? AND event_id=?",
                             (event["selected_card_id"], event["id"])).fetchone()
     if not card_row or card_row["status"] != "ok" or not card_row["file_path"] or not Path(card_row["file_path"]).is_file():
@@ -59,7 +67,7 @@ def confirm_event(event_id, operator="hr"):
 
 @feishu.in_application
 def push_event(event_id, operator="auto", force=False, with_text=True):
-    """force 只跳过计划时间，不能跳过审核、身份校验或已发送保护。"""
+    """force 只跳过当天的计划时刻，不能跨日期或跳过审核、身份校验。"""
     with tx() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
@@ -73,6 +81,8 @@ def push_event(event_id, operator="auto", force=False, with_text=True):
         if event["event_date"] < now()[:10]:
             conn.execute("UPDATE events SET status='expired',last_error='事件日期已过期',updated_at=? WHERE id=?", (now(), event_id))
             return {"ok": False, "msg": "事件日期已过期，已停止推送"}
+        if event["event_date"] > now()[:10]:
+            return {"ok": False, "msg": "未到贺卡日期，仅可在生日或入职周年当天推送"}
         if not force and event["trigger_at"] > now():
             return {"ok": False, "msg": "尚未到计划推送时间"}
         if not force and event["push_attempts"] >= MAX_PUSH_ATTEMPTS:

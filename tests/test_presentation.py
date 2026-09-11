@@ -21,15 +21,15 @@ class ReviewPresentationTests(unittest.TestCase):
             with self.subTest(joined=joined, day=day):
                 self.assertEqual(completed_years_since(joined, day), expected)
 
-    def test_leap_day_matches_existing_anniversary_policy(self):
-        for day, expected in (("2025-02-27", 0), ("2025-02-28", 1),
+    def test_leap_day_does_not_complete_anniversary_early(self):
+        for day, expected in (("2025-02-27", 0), ("2025-02-28", 0), ("2025-03-01", 1),
                               ("2028-02-28", 3), ("2028-02-29", 4)):
             with self.subTest(day=day):
                 self.assertEqual(completed_years_since(date(2024, 2, 29), day), expected)
 
-    def test_unknown_birth_year_is_not_displayed_as_real_year(self):
+    def test_birthday_display_always_omits_year(self):
         self.assertEqual(presentation.birthday_display("1896-02-29"), "02-29")
-        self.assertEqual(presentation.birthday_display("1995-09-10"), "1995-09-10")
+        self.assertEqual(presentation.birthday_display("1995-09-10"), "09-10")
         self.assertIsNone(presentation.birthday_display(None))
 
     def test_delivery_never_confuses_planned_simulated_or_uncertain_with_sent(self):

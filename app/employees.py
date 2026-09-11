@@ -32,8 +32,11 @@ HEADER_MAP = {
     **{key: key for key in ("id", *FIELDS)},
     "员工id": "id", "姓名": "name", "工号": "employee_no", "邮箱": "email",
     "部门": "department", "入职日期": "join_date", "入职时间": "join_date",
-    "生日": "birth_date", "出生日期": "birth_date", "出生年月": "birth_date", "性别": "gender",
+    "生日": "birth_date", "生日（月日）": "birth_date", "出生日期": "birth_date", "出生年月": "birth_date", "性别": "gender",
     "飞书open_id": "feishu_open_id", "open_id": "feishu_open_id",
+    "用户id": "feishu_open_id", "用户 id": "feishu_open_id",
+    "用户id（open_id）": "feishu_open_id", "用户 id（open_id）": "feishu_open_id",
+    "用户id(open_id)": "feishu_open_id", "用户 id(open_id)": "feishu_open_id",
     "飞书user_id": "feishu_user_id", "备注": "note", "在职": "active", "在职状态": "active",
 }
 
@@ -70,12 +73,14 @@ def _date(value, field):
             raw = "-".join(chinese_birthday.groups())
     formats = ["%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y%m%d"]
     for fmt in formats:
+        if fmt == "%Y%m%d" and not re.fullmatch(r"\d{8}", raw):
+            continue
         try:
             return datetime.strptime(raw, fmt).date().isoformat()
         except ValueError:
             pass
     if field == "birth_date" and re.fullmatch(r"\d{1,2}-\d{1,2}", raw):
-        # Placeholder years remain <=1901, so the scheduler does not infer age.
+        # Keep legacy storage compatibility; scheduling and display use month/day only.
         try:
             year = "1896" if tuple(map(int, raw.split("-"))) == (2, 29) else "1900"
             return datetime.strptime(year + "-" + raw, "%Y-%m-%d").date().isoformat()
@@ -85,6 +90,8 @@ def _date(value, field):
     hint = "请填写有效日期，例如 2021-02-01 或 2021年2月1日"
     if field == "join_date":
         hint += "，入职日期必须包含年份"
+    else:
+        hint = "请填写有效月日，例如 02-01 或 2月1日；生日推送不使用年份"
     raise EmployeeError(f"{label}无效：{value}；{hint}", "invalid_date")
 
 
@@ -100,6 +107,10 @@ def _normalize(payload):
             out[field] = _id(value)
         elif field in ("join_date", "birth_date"):
             out[field] = _date(value, field)
+        elif field == "feishu_open_id":
+            if not isinstance(value, str) or not re.fullmatch(r"ou_[A-Za-z0-9_]+", value.strip()):
+                raise EmployeeError("用户 ID 格式无效，请填写当前飞书应用中以 ou_ 开头的 open_id，不能填写工号或 user_id", "invalid_open_id")
+            out[field] = value.strip()
         elif field == "active":
             values = {"1": 1, "true": 1, "在职": 1, "0": 0, "false": 0, "离职": 0, "已离职": 0, "停用": 0, "已停用": 0}
             if str(value).strip().lower() not in values:
@@ -190,7 +201,7 @@ def _save(conn, data, employee_id=None, source="local"):
             conn.execute(f"UPDATE employees SET {','.join(k+'=?' for k in changed)},updated_at=? WHERE id=?",
                          [*changed.values(), db.now(), employee_id])
             if set(changed).intersection((*IDENTITY_FIELDS, "active")):
-                _reset_identity(conn, employee_id, "员工姓名或在职状态已修改，等待更新飞书对应关系")
+                _reset_identity(conn, employee_id, "员工姓名、用户 ID 或在职状态已修改，等待更新飞书对应关系")
             _invalidate_events(conn, employee_id, "员工资料已修改，请重新生成并确认贺卡",
                                deactivate=data.get("active", current["active"]) == 0)
     return {"ok": True, "id": employee_id, "created": current is None,
@@ -216,7 +227,7 @@ def save_employee(payload):
         raise EmployeeError("员工标识冲突，资料未保存", "identifier_conflict", 409) from exc
 
 
-EDIT_FIELDS = ("name", "department", "employee_no", "join_date", "birth_date", "active")
+EDIT_FIELDS = ("name", "department", "employee_no", "join_date", "birth_date", "active", "feishu_open_id")
 
 
 def batch_update(updates):
@@ -238,9 +249,9 @@ def batch_update(updates):
             raise EmployeeError("缺少原始资料，请关闭更正窗口并刷新后重试", "missing_snapshot")
         label = str(original.get("name") or "员工")
         try:
-            for key in ("name", "department", "active"):
+            for key in ("name", "department", "active", "feishu_open_id"):
                 if key in changes and _blank(changes[key]):
-                    raise EmployeeError({"name": "姓名", "department": "部门", "active": "在职状态"}[key] + "不能为空")
+                    raise EmployeeError({"name": "姓名", "department": "部门", "active": "在职状态", "feishu_open_id": "用户 ID"}[key] + "不能为空")
             data = _normalize(changes)
             # Clearing optional fields is explicit here, unlike blank import cells.
             for key in ("employee_no", "join_date", "birth_date"):

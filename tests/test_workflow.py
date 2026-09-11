@@ -81,6 +81,43 @@ class WorkflowTests(unittest.TestCase):
                 feishu.send_notice.assert_not_called()
                 feishu.send_full_card.assert_not_called()
 
+    def test_legacy_birthday_age_requires_regeneration_before_confirm_or_send(self):
+        eid, _ = self.prepare()
+        db.execute('UPDATE events SET years=31 WHERE id=?', (eid,))
+        response = self.client.post(f'/api/events/{eid}/confirm', json={'operator': 'test'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('生日不计算年龄', response.json()['detail'])
+        db.execute('UPDATE events SET years=NULL WHERE id=?', (eid,))
+        self.confirm(eid)
+        db.execute('UPDATE events SET years=31 WHERE id=?', (eid,))
+        result = push.push_event(eid, force=True)
+        self.assertEqual(result['status'], 'blocked')
+        feishu.upload_image.assert_not_called()
+        feishu.send_notice.assert_not_called()
+        feishu.send_full_card.assert_not_called()
+
+    def test_force_cannot_send_before_the_birthday_date(self):
+        eid, _ = self.prepare()
+        self.confirm(eid)
+        with patch.object(push, 'now', return_value='2026-09-09 12:00:00'):
+            result = push.push_event(eid, force=True)
+        self.assertFalse(result['ok'])
+        self.assertIn('未到贺卡日期', result['msg'])
+        self.assertEqual(db.query_one('SELECT status FROM events WHERE id=?', (eid,))['status'], 'confirmed')
+        feishu.send_notice.assert_not_called()
+        feishu.send_full_card.assert_not_called()
+
+    def test_push_rechecks_actual_month_day_even_for_confirmed_legacy_events(self):
+        eid, _ = self.prepare()
+        self.confirm(eid)
+        db.execute("UPDATE events SET event_date='2026-09-11' WHERE id=?", (eid,))
+        with patch.object(push, 'now', return_value='2026-09-11 12:00:00'):
+            result = push.push_event(eid, force=True)
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('贺卡日期', result['msg'])
+        feishu.send_notice.assert_not_called()
+        feishu.send_full_card.assert_not_called()
+
     def test_new_remote_same_name_blocks_before_notice_and_before_full_card(self):
         eid, card = self.prepare()
         self.confirm(eid)
@@ -398,16 +435,16 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual((saved["join_date"], saved["birth_date"]), ("2026-08-03", "1896-02-29"))
                 self.assertEqual(db.query_one("SELECT join_date FROM employees WHERE id=?", (self.emp["id"],))["join_date"], "2021-02-01")
 
-    def test_review_fields_derive_service_years_separately_from_birthday_age(self):
+    def test_review_fields_show_service_years_without_birthday_age(self):
         eid, _ = self.prepare()
         response = self.client.get(f"/api/events/{eid}")
         self.assertEqual(response.status_code, 200, response.text)
         view = response.json()
         self.assertEqual(view["event_type"], "birthday")
-        self.assertEqual((view["years"], view["anniversary_years"]), (31, 3))
+        self.assertEqual((view["years"], view["anniversary_years"]), (None, 3))
         self.assertEqual(view["employee"]["employee_no"], "E001")
         self.assertEqual(view["employee"]["join_date"], "2023-09-10")
-        self.assertEqual(view["employee"]["birth_date_display"], "1995-09-10")
+        self.assertEqual(view["employee"]["birth_date_display"], "09-10")
         self.assertFalse(view["is_pushed"])
         self.assertIsNone(view["actual_push_at"])
         self.assertEqual(view["planned_push_at"], view["trigger_at"])

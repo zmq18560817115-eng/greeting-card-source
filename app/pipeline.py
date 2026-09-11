@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import compose, doubao
 from .dates import match_employee, next_cycle, parse_date
 from .db import execute, now, query, tx
+from .presentation import birthday_display
 from .settings import BG_DIR, CARD_DIR, CARDS_PER_EVENT
 
 log = logging.getLogger("pipeline")
@@ -25,12 +26,21 @@ def active_employees():
     return query("SELECT * FROM employees WHERE active=1")
 
 
-def scan_cycle(cycle=None, today=None):
+def scan_cycle(cycle=None, today=None, *, employee_id=None):
+    if employee_id is not None and (isinstance(employee_id, bool) or not isinstance(employee_id, int) or employee_id <= 0):
+        raise ValueError("请选择有效员工")
     start, end = cycle or next_cycle(today)
     created = []
     with tx() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        for row in conn.execute("SELECT * FROM employees WHERE active=1").fetchall():
+        sql, params = "SELECT * FROM employees WHERE active=1", []
+        if employee_id is not None:
+            sql += " AND id=?"
+            params.append(employee_id)
+        rows = conn.execute(sql, params).fetchall()
+        if employee_id is not None and not rows:
+            raise ValueError("员工不存在或已离职，无法生成贺卡")
+        for row in rows:
             emp = dict(row)
             for hit in match_employee(emp, start, end):
                 cur = conn.execute(
@@ -50,9 +60,9 @@ def build_context(event, emp):
         raise ValueError("事件日期无效")
     return {"name": emp["name"], "department": emp.get("department") or "",
             "employee_id": emp.get("id") or "", "event_date": day.isoformat(),
-            "years": event.get("years") if event.get("years") is not None else "", "date": day.isoformat(),
+            "years": event.get("years") if event.get("event_type") == "anniversary" and event.get("years") is not None else "", "date": day.isoformat(),
             "year": day.year, "month": day.month, "day": day.day,
-            "join_date": emp.get("join_date") or "", "birth_date": emp.get("birth_date") or ""}
+            "join_date": emp.get("join_date") or "", "birth_date": birthday_display(emp.get("birth_date")) or ""}
 
 
 def _claim_generation(event_id, count, cfg):
@@ -164,16 +174,20 @@ def submit_generate(event_id, count=None):
         raise
 
 
-def _pending_generation(start, end):
-    return [row["id"] for row in query("""SELECT e.id FROM events e JOIN employees emp ON emp.id=e.employee_id
+def _pending_generation(start, end, *, employee_id=None):
+    sql = """SELECT e.id FROM events e JOIN employees emp ON emp.id=e.employee_id
                 WHERE emp.active=1 AND e.event_date BETWEEN ? AND ?
-                AND ((e.status='generating' AND e.generation_token IS NULL) OR e.status='gen_failed')
-                ORDER BY e.id""", (start.isoformat(), end.isoformat()))]
+                AND ((e.status='generating' AND e.generation_token IS NULL) OR e.status='gen_failed')"""
+    params = [start.isoformat(), end.isoformat()]
+    if employee_id is not None:
+        sql += " AND e.employee_id=?"
+        params.append(employee_id)
+    return [row["id"] for row in query(sql + " ORDER BY e.id", params)]
 
 
-def run_weekly_async(cycle=None, today=None):
-    created, start, end = scan_cycle(cycle, today)
-    pending = _pending_generation(start, end)
+def run_weekly_async(cycle=None, today=None, *, employee_id=None):
+    created, start, end = scan_cycle(cycle, today, employee_id=employee_id)
+    pending = _pending_generation(start, end, employee_id=employee_id)
     tid = uuid.uuid4().hex
     task = {"status": "running", "created": len(created), "total": len(pending), "events": pending,
             "cycle": [start.isoformat(), end.isoformat()], "done": 0, "generated": 0, "errors": []}
