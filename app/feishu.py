@@ -2,9 +2,8 @@
 
 用到的能力 / 权限（后台「权限管理」需开通）：
   contact:contact.base:readonly / contact:user.base:readonly   读通讯录基础信息
-  contact:user.employee_id:readonly                            读 user_id
-  contact:user.employee_job:readonly (或 contact:user.base)    读 join_time 入职时间
-  contact:custom_attr.read (可选)                              读企业自定义字段（如生日）
+  contact:user.employee:readonly                             读入职等受雇信息
+  contact:group:readonly                                     授权范围包含用户组时读取成员
   im:message:send_as_bot / im:message                          机器人发单聊消息
   im:resource  (上传图片)
 """
@@ -12,6 +11,7 @@ import json
 import logging
 import threading
 import time
+from functools import wraps
 from urllib.parse import quote
 
 import requests
@@ -23,6 +23,23 @@ log = logging.getLogger("feishu")
 
 _token = {"value": None, "expire_at": 0}
 _lock = threading.Lock()
+_application_lock = threading.RLock()
+_active_application_operations = 0
+
+
+def in_application(function):
+    """Keep credentials stable across directory reads, binding and delivery."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        global _active_application_operations
+        with _application_lock:
+            _active_application_operations += 1
+        try:
+            return function(*args, **kwargs)
+        finally:
+            with _application_lock:
+                _active_application_operations -= 1
+    return wrapped
 
 
 class FeishuError(RuntimeError):
@@ -160,16 +177,54 @@ def _pages(path, params):
 
 
 def list_users():
-    """只读取应用授权范围，含直接授权用户和授权部门的成员。"""
+    """只读取应用授权范围，含直接授权用户、部门和用户组成员。"""
     return list_scope_users()
 
 
+def _group_scope_ids(group_ids):
+    user_ids, department_ids = set(), set()
+    for gid in sorted(group_ids):
+        try:
+            # A group can contain both users and departments; neither may be omitted.
+            for kind, target in (("user", user_ids), ("department", department_ids)):
+                for data in _pages(f"/open-apis/contact/v3/group/{quote(gid, safe='')}/member/simplelist",
+                                   {"member_id_type": "open_id", "member_type": kind, "page_size": 100}):
+                    for member in data.get("memberlist") or []:
+                        allowed_types = ("open_id",) if kind == "user" else ("open_id", "open_department_id")
+                        if (not isinstance(member, dict) or member.get("member_type") != kind
+                                or member.get("member_id_type") not in allowed_types
+                                or not isinstance(member.get("member_id"), str) or not member["member_id"].strip()
+                                or (kind == "user" and not member["member_id"].startswith("ou_"))):
+                            raise FeishuError(-1, "用户组成员未返回有效的开放 ID，不能确认完整名单")
+                        target.add(member["member_id"])
+        except FeishuError as exc:
+            hint = ("请开通“读取用户组”权限 contact:group:readonly 并发布应用后重试。"
+                    if exc.code == 99991672 else "请检查用户组权限范围或返回资料。")
+            raise FeishuError(exc.code, "无法完整读取授权用户组，已停止自动对应和推送。" + hint + exc.msg) from exc
+    return user_ids, department_ids
+
+
+@in_application
 def list_scope_users():
-    users, user_ids, department_ids = {}, set(), set()
+    users, user_ids, department_ids, group_ids = {}, set(), set(), set()
     for data in _pages("/open-apis/contact/v3/scopes",
                        {"user_id_type": "open_id", "department_id_type": "open_department_id", "page_size": 100}):
         user_ids.update(data.get("user_ids") or [])
         department_ids.update(data.get("department_ids") or [])
+        group_ids.update(data.get("group_ids") or [])
+    group_users, group_departments = _group_scope_ids(group_ids)
+    user_ids.update(group_users)
+    department_ids.update(group_departments)
+
+    def add_user(user, expected_id=None):
+        if not isinstance(user, dict) or not isinstance(user.get("open_id"), str) or not user["open_id"].startswith("ou_"):
+            raise FeishuError(-1, "通讯录人员缺少有效的 open_id，不能确认完整名单")
+        oid = user["open_id"]
+        if expected_id and oid != expected_id:
+            raise FeishuError(-1, "通讯录返回的 open_id 与查询对象不一致，停止对应")
+        if oid in users and any(users[oid].get(k) != user.get(k) for k in ("name", "status")):
+            raise FeishuError(-1, "同一 open_id 返回了冲突的姓名或在职状态，停止对应")
+        users[oid] = user
     expanded = set(department_ids)
     for did in sorted(department_ids):
         for data in _pages(f"/open-apis/contact/v3/departments/{quote(did, safe='')}/children",
@@ -180,11 +235,10 @@ def list_scope_users():
                            {"department_id": did, "department_id_type": "open_department_id",
                             "user_id_type": "open_id", "page_size": 50}):
             for user in data.get("items", []):
-                if user.get("open_id"):
-                    users[user["open_id"]] = user
+                add_user(user)
     for oid in sorted(user_ids):
         if oid not in users:
-            users[oid] = get_user(oid)
+            add_user(get_user(oid), expected_id=oid)
     return list(users.values())
 
 
@@ -308,3 +362,35 @@ def send_card(open_id, title, md_text, image_key, note="HR 关怀", uuid=None):
         params={"receive_id_type": "open_id"},
     )
     return data["data"]["message_id"]
+
+
+def _send_interactive(open_id, card, uuid):
+    payload = {"receive_id": open_id, "msg_type": "interactive",
+               "content": json.dumps(card, ensure_ascii=False), "uuid": uuid}
+    data = _post("/open-apis/im/v1/messages", payload,
+                 params={"receive_id_type": "open_id"})
+    message_id = data.get("data", {}).get("message_id")
+    if not isinstance(message_id, str) or not message_id.strip():
+        raise ValueError("飞书未返回消息 ID，发送结果待确认")
+    return message_id
+
+
+def send_notice(open_id, title, uuid):
+    """第一步发送简短通知，无图片或确认按钮。"""
+    return _send_interactive(open_id, {
+        "config": {"wide_screen_mode": False, "enable_forward": False},
+        "header": {"template": "turquoise", "title": {"tag": "plain_text", "content": title}},
+        "elements": [
+            {"tag": "div", "text": {"tag": "plain_text", "content": "你有一份专属祝福，完整贺卡即将送达。"}},
+        ],
+    }, uuid)
+
+
+def send_full_card(open_id, title, image_key, uuid):
+    """第二步自动发送完整海报。"""
+    return _send_interactive(open_id, {
+        "config": {"wide_screen_mode": True, "enable_forward": False},
+        "header": {"template": "turquoise", "title": {"tag": "plain_text", "content": title}},
+        "elements": [{"tag": "img", "img_key": image_key, "mode": "fit_horizontal",
+                      "preview": True, "alt": {"tag": "plain_text", "content": title}}],
+    }, uuid)

@@ -13,6 +13,8 @@ def friendly_error(value):
         return "还没有连接飞书，请在「系统状态 → 飞书连接」填写应用凭据。"
     if any(word in lower for word in ("app secret invalid", "invalid app secret", "app_secret invalid", "invalid app_id", "invalid app id")):
         return "飞书应用凭据不正确，请核对同一个应用的 App ID 和 App Secret 后重新保存。"
+    if 'contact:group:readonly' in lower and ('99991672' in lower or 'access denied' in lower):
+        return "应用缺少“读取用户组”权限，无法完整检查姓名与 open_id 的对应关系。请开通 contact:group:readonly 并发布应用后重试；暂不推送。"
     if any(word in lower for word in ("insufficient scope", "scopes is required", "scopes are required", "access denied", "no permission", "forbidden")):
         return "访问权限不足，请管理员根据技术详情开通对应权限；飞书应用修改权限后还需发布生效。"
     if any(word in lower for word in ("read timed out", "connecttimeout", "readtimeout", "timed out", "timeout", "连接飞书超时")):

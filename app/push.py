@@ -29,6 +29,7 @@ def _review_data(conn, event):
     return emp, card
 
 
+@feishu.in_application
 def confirm_event(event_id, operator="hr"):
     # 外部核验期间不持有数据库锁，写入前再核对快照和选图。
     with tx() as conn:
@@ -51,11 +52,12 @@ def confirm_event(event_id, operator="hr"):
         if current["status"] != "ready" or current_card["id"] != card["id"] or employee_snapshot(current_emp) != employee_snapshot(emp):
             raise ValueError("审核期间资料或海报已变更，请刷新后重试")
         conn.execute("""UPDATE events SET status='confirmed',confirmed_by=?,confirmed_at=?,
-                      employee_snapshot=?,delivery_uuid=?,push_attempts=0,last_error=NULL,updated_at=? WHERE id=?""",
-                     (operator, now(), employee_snapshot(emp), uuid.uuid4().hex, now(), event_id))
+                      employee_snapshot=?,delivery_uuid=?,confirmed_app_id=?,push_attempts=0,last_error=NULL,updated_at=? WHERE id=?""",
+                     (operator, now(), employee_snapshot(emp), uuid.uuid4().hex, feishu.FEISHU_APP_ID, now(), event_id))
     return {"ok": True, "trigger_at": event["trigger_at"]}
 
 
+@feishu.in_application
 def push_event(event_id, operator="auto", force=False, with_text=True):
     """force 只跳过计划时间，不能跳过审核、身份校验或已发送保护。"""
     with tx() as conn:
@@ -76,13 +78,15 @@ def push_event(event_id, operator="auto", force=False, with_text=True):
         if not force and event["push_attempts"] >= MAX_PUSH_ATTEMPTS:
             return {"ok": False, "msg": "已达到自动重试次数上限"}
         try:
+            if not event.get("confirmed_app_id") or event["confirmed_app_id"] != feishu.FEISHU_APP_ID:
+                raise ValueError("审核记录未绑定当前飞书应用，请重新生成并确认排期；不会沿用其他应用的 open_id")
             emp, card = _review_data(conn, event)
             if event["employee_snapshot"] != employee_snapshot(emp):
                 raise ValueError("确认后员工资料已变更，请重新审核")
         except ValueError as exc:
             conn.execute("UPDATE events SET status='blocked',last_error=?,updated_at=? WHERE id=?",
                          (str(exc), now(), event_id))
-            return {"ok": False, "msg": str(exc)}
+            return {"ok": False, "msg": str(exc), "status": "blocked"}
         attempt = event["push_attempts"] + 1
         delivery_uuid = event["delivery_uuid"] or uuid.uuid4().hex
         conn.execute("""UPDATE events SET status='pushing',push_attempts=?,delivery_uuid=?,worker_pid=?,
@@ -92,7 +96,13 @@ def push_event(event_id, operator="auto", force=False, with_text=True):
     send_started = False
     evidence = None
     status = "failed"
+    app_id = feishu.FEISHU_APP_ID
+    notice_sent = bool(event.get("notice_message_id") and event.get("notice_delivery_uuid") == delivery_uuid)
+    stage = "完整贺卡" if notice_sent else "简短通知"
     try:
+        if notice_sent and (event.get("notice_app_id"), event.get("notice_open_id")) != (app_id, emp["feishu_open_id"]):
+            status = "blocked"
+            raise ValueError("通知发送后飞书应用或收件人已变化，请联系管理员核对")
         result = employees.validate_identity(emp)
         if not result["ok"]:
             status = "blocked"
@@ -112,13 +122,47 @@ def push_event(event_id, operator="auto", force=False, with_text=True):
             if event["event_date"] < now()[:10]:
                 status = "expired"
                 raise ValueError("上传期间事件日期已过期，停止发送")
+            if feishu.FEISHU_APP_ID != app_id:
+                status = "blocked"
+                raise ValueError("发送期间飞书应用已变化，请重新检查连接")
+            if not notice_sent:
+                # Each stage has a stable, distinct UUID. Persist the first receipt
+                # before starting the second request, including crash recovery.
+                execute("UPDATE events SET delivery_started_at=?,updated_at=? WHERE id=? AND status='pushing'",
+                        (now(), now(), event_id))
+                send_started = True
+                notice_id = feishu.send_notice(emp["feishu_open_id"], CARD_TITLE[event["event_type"]],
+                    uuid=uuid.uuid5(uuid.NAMESPACE_URL, delivery_uuid + ":notice").hex)
+                with tx() as conn:
+                    timestamp = now()
+                    conn.execute("""UPDATE events SET notice_message_id=?,notice_delivery_uuid=?,
+                                 notice_app_id=?,notice_open_id=?,notice_sent_at=?,
+                                 delivery_started_at=NULL,updated_at=? WHERE id=?""",
+                                 (notice_id, delivery_uuid, app_id, emp["feishu_open_id"], timestamp, timestamp, event_id))
+                    conn.execute("""INSERT INTO push_logs(event_id,card_id,attempt,status,message_id,
+                                 operator,recipient_snapshot,created_at) VALUES(?,?,?,'notice_success',?,?,?,?)""",
+                                 (event_id, card["id"], attempt, notice_id, operator,
+                                  json.dumps(evidence, ensure_ascii=False), timestamp))
+                notice_sent = True
+                send_started = False
+            stage = "完整贺卡"
+            # A recipient may leave or become unavailable between the two messages.
+            result = employees.validate_identity(emp)
+            if not result["ok"]:
+                status = "blocked"
+                raise ValueError(result.get("error") or "完整贺卡发送前身份核验失败")
+            evidence = result.get("evidence") or result
+            if feishu.FEISHU_APP_ID != app_id:
+                status = "blocked"
+                raise ValueError("通知发送后飞书应用已变化，请联系管理员核对")
+            if event["event_date"] < now()[:10]:
+                status = "expired"
+                raise ValueError("事件日期已过期，停止发送完整贺卡")
             execute("UPDATE events SET delivery_started_at=?,updated_at=? WHERE id=? AND status='pushing'",
                     (now(), now(), event_id))
             send_started = True
-            message_id = feishu.send_card(
-                emp["feishu_open_id"], CARD_TITLE[event["event_type"]],
-                "你收到一份专属祝福。\n点击右侧小图，打开完整贺卡。",
-                image_key, uuid=delivery_uuid)
+            message_id = feishu.send_full_card(emp["feishu_open_id"], CARD_TITLE[event["event_type"]],
+                                              image_key, uuid=delivery_uuid)
             status = "pushed"
         with tx() as conn:
             conn.execute("""UPDATE events SET status=?,pushed_at=?,worker_pid=NULL,last_error=NULL,updated_at=? WHERE id=?""",
@@ -128,14 +172,18 @@ def push_event(event_id, operator="auto", force=False, with_text=True):
                          (event_id, card["id"], attempt, "success" if status == "pushed" else "simulated",
                           image_key, message_id, operator, json.dumps(evidence, ensure_ascii=False), now()))
         return {"ok": True, "message_id": message_id, "dry_run": DRY_RUN,
-                "msg": "演练完成，未向飞书发送消息" if DRY_RUN else "推送成功"}
+                "msg": "演练完成，未向飞书发送消息" if DRY_RUN else "简短通知和完整贺卡已依次发送"}
     except Exception as exc:
         # 发送请求一旦发出，超时也可能已送达，不自动重发以免员工收到两份。
         if send_started and not (isinstance(exc, feishu.FeishuError) and exc.definitive):
             status = "delivery_unknown"
         elif isinstance(exc, employees.IdentityError):
             status = "blocked"
-        error = str(exc)[:1000]
+        detail = str(exc)[:1000]
+        if notice_sent:
+            error = "简短通知已发送；完整贺卡" + ("发送结果待确认：" if status == "delivery_unknown" else "未发送成功：") + detail
+        else:
+            error = stage + ("发送结果待确认：" if status == "delivery_unknown" else "未发送成功：") + detail
         with tx() as conn:
             conn.execute("UPDATE events SET status=?,worker_pid=NULL,last_error=?,updated_at=? WHERE id=?",
                          (status, error, now(), event_id))

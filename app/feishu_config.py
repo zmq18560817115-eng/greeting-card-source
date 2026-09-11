@@ -21,7 +21,9 @@ def save_config(app_id, app_secret=""):
     if not isinstance(app_secret, str) or any(char in app_secret for char in "\r\n\x00"):
         raise ValueError("App Secret 格式无效，请重新复制应用密钥")
     app_id, app_secret = app_id.strip(), app_secret.strip()
-    with _save_lock, feishu._lock:
+    with feishu._application_lock, _save_lock, feishu._lock:
+        if feishu._active_application_operations:
+            raise ValueError("正在读取通讯录或执行推送，请完成后再更改飞书配置")
         if not app_secret:
             if app_id != feishu.FEISHU_APP_ID or not feishu.FEISHU_APP_SECRET:
                 raise ValueError("首次连接或更换 App ID 时必须填写对应的 App Secret")
@@ -58,16 +60,22 @@ def save_config(app_id, app_secret=""):
     return {"ok": True, **public_config(), "msg": "飞书配置已保存并生效，请检查通讯录连接"}
 
 
+@feishu.in_application
 def check_connection():
     try:
         # A valid token alone does not prove permission to read the directory.
         feishu.tenant_access_token()
-        data = feishu._get("/open-apis/contact/v3/scopes", {
-            "user_id_type": "open_id", "department_id_type": "open_department_id", "page_size": 100})["data"]
-        if not isinstance(data, dict):
-            raise feishu.FeishuError(-1, "通讯录权限范围返回格式无效")
-        if not any(data.get(key) for key in ("user_ids", "department_ids", "group_ids")) and not data.get("has_more"):
+        groups, has_scope = set(), False
+        for data in feishu._pages("/open-apis/contact/v3/scopes", {
+                "user_id_type": "open_id", "department_id_type": "open_department_id", "page_size": 100}):
+            if not isinstance(data, dict):
+                raise feishu.FeishuError(-1, "通讯录权限范围返回格式无效")
+            has_scope = has_scope or any(data.get(key) for key in ("user_ids", "department_ids", "group_ids"))
+            groups.update(data.get("group_ids") or [])
+        if not has_scope:
             return {"ok": False, "msg": "应用已连接，但通讯录授权范围为空；请在飞书开放平台配置目标员工并发布应用"}
-        return {"ok": True, "msg": "通讯录授权范围检查通过；可同步名单，姓名和部门权限将在逐人核验时检查"}
+        # Groups must not be silently ignored when deciding whether a name is unique.
+        feishu._group_scope_ids(groups)
+        return {"ok": True, "msg": "通讯录授权范围检查通过；同步后按姓名 + open_id 一一对应，发送前实时检查姓名、open_id 和在职状态"}
     except Exception as exc:
         return {"ok": False, "msg": feishu.connection_error(exc)}

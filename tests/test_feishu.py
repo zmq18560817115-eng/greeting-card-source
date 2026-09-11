@@ -40,6 +40,65 @@ class FeishuContractTests(unittest.TestCase):
             with self.assertRaises(feishu.FeishuError):
                 feishu.list_scope_users()
 
+    def test_group_members_use_open_id_and_paginate(self):
+        def get(path, params):
+            if path.endswith('/scopes'):
+                return {'data': {'group_ids': ['g1']}}
+            if path.endswith('/member/simplelist'):
+                self.assertEqual(params['member_id_type'], 'open_id')
+                if params['member_type'] == 'department':
+                    return {'data': {'memberlist': []}}
+                self.assertEqual(params['member_type'], 'user')
+                last = bool(params.get('page_token'))
+                return {'data': {'memberlist': [{'member_id': 'ou_b' if last else 'ou_a',
+                    'member_type': 'user', 'member_id_type': 'open_id'}],
+                    'has_more': not last, 'page_token': 'second'}}
+            return {'data': {'user': {'open_id': path.rsplit('/', 1)[-1], 'name': '员工'}}}
+        with patch.object(feishu, '_get', side_effect=get):
+            self.assertEqual({u['open_id'] for u in feishu.list_scope_users()}, {'ou_a', 'ou_b'})
+
+    def test_departments_inside_authorized_group_are_expanded(self):
+        def get(path, params):
+            if path.endswith('/scopes'):
+                return {'data': {'group_ids':['g1']}}
+            if path.endswith('/member/simplelist'):
+                return {'data': {'memberlist': [] if params['member_type'] == 'user' else [
+                    {'member_type':'department', 'member_id_type':'open_id', 'member_id':'od_group'}]}}
+            if path.endswith('/children'):
+                self.assertIn('/od_group/children', path)
+                return {'data': {'items':[{'open_department_id':'od_child'}]}}
+            return {'data': {'items':[{'open_id':'ou_'+params['department_id'], 'name':params['department_id']}]}}
+        with patch.object(feishu, '_get', side_effect=get):
+            self.assertEqual({u['open_id'] for u in feishu.list_scope_users()}, {'ou_od_group','ou_od_child'})
+
+    def test_unreadable_group_never_returns_partial_department_directory(self):
+        def get(path, params):
+            if path.endswith('/scopes'):
+                return {'data': {'department_ids': ['od_a'], 'group_ids': ['g1']}}
+            raise feishu.FeishuError(99991672, 'contact:group:readonly')
+        with patch.object(feishu, '_get', side_effect=get):
+            with self.assertRaisesRegex(feishu.FeishuError, '停止自动对应和推送'):
+                feishu.list_scope_users()
+
+    def test_conflicting_name_for_one_open_id_is_not_overwritten(self):
+        def get(path, params):
+            if path.endswith('/scopes'):
+                return {'data': {'department_ids': ['od_a', 'od_b']}}
+            if path.endswith('/children'):
+                return {'data': {}}
+            return {'data': {'items': [{'open_id': 'ou_one', 'name': params['department_id']}]}}
+        with patch.object(feishu, '_get', side_effect=get):
+            with self.assertRaisesRegex(feishu.FeishuError, '冲突的姓名'):
+                feishu.list_scope_users()
+
+    def test_missing_or_wrong_group_id_type_is_rejected(self):
+        for member in ({'member_id': 'user123', 'member_type': 'user', 'member_id_type': 'user_id'},
+                       {'member_type': 'user', 'member_id_type': 'open_id'}):
+            with self.subTest(member=member), patch.object(feishu, '_get', side_effect=[
+                    {'data': {'group_ids': ['g1']}}, {'data': {'memberlist': [member]}}]):
+                with self.assertRaises(feishu.FeishuError):
+                    feishu.list_scope_users()
+
     def test_send_card_is_compact_and_opens_original_image(self):
         with patch.object(feishu, "_post", return_value={"data": {"message_id": "om_1"}}) as post:
             message_id = feishu.send_card("ou_employee", "贺卡", "点击查看", "img_1", uuid="unique")
@@ -69,6 +128,37 @@ class FeishuContractTests(unittest.TestCase):
             with self.assertRaises(feishu.FeishuError) as caught:
                 feishu._check(response)
             self.assertEqual(caught.exception.definitive, definite)
+
+    def test_automatic_notice_has_no_image_or_confirmation_action(self):
+        with patch.object(feishu, "_post", return_value={"data": {"message_id": "om_notice"}}) as post:
+            self.assertEqual(feishu.send_notice("ou_employee", "生日贺卡", "notice_uuid"), "om_notice")
+        payload = post.call_args.args[1]
+        card = json.loads(payload["content"])
+        self.assertEqual(payload["receive_id"], "ou_employee")
+        self.assertEqual(payload["uuid"], "notice_uuid")
+        self.assertFalse(card["config"]["wide_screen_mode"])
+        self.assertEqual([element["tag"] for element in card["elements"]], ["div"])
+        self.assertNotIn("extra", card["elements"][0])
+        self.assertNotIn("点击", payload["content"])
+        self.assertNotIn("领取", payload["content"])
+
+    def test_full_card_contains_original_poster(self):
+        with patch.object(feishu, "_post", return_value={"data": {"message_id": "om_full"}}) as post:
+            self.assertEqual(feishu.send_full_card("ou_employee", "生日贺卡", "img_original", "full_uuid"), "om_full")
+        payload = post.call_args.args[1]
+        card = json.loads(payload["content"])
+        self.assertEqual(payload["uuid"], "full_uuid")
+        self.assertEqual(payload["receive_id"], "ou_employee")
+        self.assertTrue(card["config"]["wide_screen_mode"])
+        self.assertEqual(card["elements"][0]["img_key"], "img_original")
+        self.assertEqual(card["elements"][0]["mode"], "fit_horizontal")
+        self.assertTrue(card["elements"][0]["preview"])
+
+    def test_missing_receipt_is_not_treated_as_success(self):
+        for message_id in (None, "", " "):
+            with self.subTest(message_id=message_id), patch.object(feishu, "_post", return_value={"data": {"message_id": message_id}}):
+                with self.assertRaisesRegex(ValueError, "发送结果待确认"):
+                    feishu.send_notice("ou_employee", "生日贺卡", "notice_uuid")
 
 
 if __name__ == "__main__":

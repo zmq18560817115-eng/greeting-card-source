@@ -27,7 +27,7 @@ class EmployeeTests(unittest.TestCase):
         self.get_department = self.mock_api("get_department", side_effect=lambda did: {
             "open_department_id": did, "name": {"d1": "研发部", "d2": "市场部", "d3": "研发"}.get(did, "未知部")})
         self.list_users = self.mock_api("list_users", return_value=[])
-        self.list_scope = self.mock_api("list_scope_users", return_value=[])
+        self.list_scope = self.mock_api("list_scope_users", return_value=[self.remote()])
         self.custom_attrs = self.mock_api("list_custom_attrs", return_value=[])
         network = patch("requests.sessions.Session.request", side_effect=AssertionError("Tests must never use the network"))
         network.start()
@@ -89,6 +89,43 @@ class EmployeeTests(unittest.TestCase):
                 with self.assertRaises(employees.IdentityError) as raised:
                     employees.validate_identity(self.get(eid))
                 self.assertEqual(raised.exception.code, code)
+
+    def test_remote_same_name_not_imported_locally_still_blocks_delivery(self):
+        eid = self.employee()
+        self.list_scope.return_value = [self.remote(), self.remote(open_id='ou_unimported')]
+        with self.assertRaises(employees.IdentityError) as raised:
+            employees.validate_identity(self.get(eid))
+        self.assertEqual(raised.exception.code, 'ambiguous_feishu_name')
+
+    def test_binding_endpoint_cannot_bypass_remote_name_conflict(self):
+        eid = self.employee(feishu_open_id=None)
+        self.list_scope.return_value = [self.remote(), self.remote(open_id='ou_other')]
+        result = employees.verify_employee(eid, 'ou_one')
+        self.assertFalse(result['ok'])
+        self.assertFalse(self.get(eid)['feishu_open_id'])
+
+    def test_incomplete_or_conflicting_directory_fails_closed(self):
+        eid = self.employee()
+        for directory in ([], [self.remote(name='李四')], [self.remote(), {'open_id':'ou_incomplete'}]):
+            with self.subTest(directory=directory):
+                self.list_scope.return_value = directory
+                with self.assertRaises(employees.IdentityError):
+                    employees.validate_identity(self.get(eid))
+        self.list_scope.side_effect = feishu.FeishuError(99991672, 'contact:group:readonly')
+        result = employees.verify_employee(eid)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['code'], 'directory_unavailable')
+
+    def test_only_open_id_is_accepted_and_evidence_records_application(self):
+        eid = self.employee()
+        for oid in ('user123', 'od_department', 'on_union', ' ou_one'):
+            with self.subTest(oid=oid), self.assertRaises(employees.IdentityError):
+                employees.validate_identity({**self.get(eid), 'feishu_open_id':oid})
+        self.get_user.assert_not_called()
+        with patch.object(feishu, 'FEISHU_APP_ID', 'cli_identity_test'):
+            evidence = employees.validate_identity(self.get(eid))['evidence']
+        self.assertEqual(evidence['app_id'], 'cli_identity_test')
+        self.assertTrue(evidence['directory_unique'])
 
     def test_department_difference_does_not_block_name_id_mapping(self):
         eid = self.employee(department="研发")
@@ -565,8 +602,23 @@ class EmployeeTests(unittest.TestCase):
         self.assertEqual(sync._extract_birthday(user, {"birth"}), "1990-02-03")
         self.custom_attrs.side_effect = RuntimeError("no access")
         self.list_users.return_value = [user]
-        sync.sync_from_feishu()
+        result = sync.sync_from_feishu()
+        self.assertTrue(result["warnings"])
         self.assertIsNone(db.query_one("SELECT birth_date FROM employees")["birth_date"])
+
+    def test_sync_reports_missing_birthday_field_without_failing_basic_sync(self):
+        self.list_users.return_value = [self.remote()]
+        result = sync.sync_from_feishu()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["added"], 1)
+        self.assertIn("未返回可识别", result["warnings"][0])
+
+    def test_sync_with_birthday_attribute_has_no_missing_field_warning(self):
+        self.custom_attrs.return_value = [{"id":"birth", "i18n_name":[{"value":"出生日期"}]}]
+        self.list_users.return_value = [self.remote(custom_attrs=[{"id":"birth", "value":{"text":"1990-02-03"}}])]
+        result = sync.sync_from_feishu()
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(db.query_one("SELECT birth_date FROM employees")["birth_date"], "1990-02-03")
 
     def test_month_day_birthday_accepts_leap_day_without_fake_age(self):
         eid = self.employee(birth_date="02-29")

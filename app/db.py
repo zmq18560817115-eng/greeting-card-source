@@ -132,7 +132,9 @@ def init_db():
             },
             "events": {"employee_snapshot": "TEXT", "delivery_uuid": "TEXT",
                        "generation_token": "TEXT", "worker_pid": "INTEGER",
-                       "delivery_started_at": "TEXT"},
+                       "delivery_started_at": "TEXT", "notice_message_id": "TEXT",
+                       "notice_delivery_uuid": "TEXT", "notice_app_id": "TEXT",
+                       "notice_open_id": "TEXT", "notice_sent_at": "TEXT", "confirmed_app_id": "TEXT"},
             "cards": {"employee_snapshot": "TEXT"},
             "push_logs": {"recipient_snapshot": "TEXT"},
         }

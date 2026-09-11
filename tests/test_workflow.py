@@ -12,7 +12,7 @@ from PIL import Image
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app import db, employees, feishu, main, pipeline, push, templates
+from app import db, employees, feishu, main, pipeline, push, recovery, scheduler, templates
 
 
 class WorkflowTests(unittest.TestCase):
@@ -20,6 +20,7 @@ class WorkflowTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.patches = [
+            patch.object(feishu, "FEISHU_APP_ID", "cli_workflow_test"),
             patch.object(db, "DB_PATH", self.root / "test.db"),
             patch.object(pipeline, "CARD_DIR", self.root / "cards"),
             patch.object(main, "OUTPUT_DIR", self.root),
@@ -29,7 +30,8 @@ class WorkflowTests(unittest.TestCase):
             patch.object(feishu, "get_user", side_effect=self.remote_user),
             patch.object(feishu, "get_department", return_value={"open_department_id": "od_sales", "name": "市场中心"}),
             patch.object(feishu, "upload_image", return_value="image_test"),
-            patch.object(feishu, "send_card", return_value="message_test"),
+            patch.object(feishu, "send_notice", return_value="notice_test"),
+            patch.object(feishu, "send_full_card", return_value="message_test"),
             patch.object(push, "DRY_RUN", False),
             patch.object(push, "now", return_value="2026-09-10 12:00:00"),
         ]
@@ -66,22 +68,133 @@ class WorkflowTests(unittest.TestCase):
         response = self.client.post(f"/api/events/{eid}/confirm", json={"operator": "test"})
         self.assertEqual(response.status_code, 200, response.text)
 
+    def test_app_change_or_legacy_approval_blocks_both_messages(self):
+        eid, card = self.prepare()
+        for app_id in ('cli_another_app', None):
+            with self.subTest(app_id=app_id):
+                self.client.post(f'/api/events/{eid}/select', json={'card_id':card['id']})
+                self.confirm(eid)
+                db.execute('UPDATE events SET confirmed_app_id=? WHERE id=?', (app_id, eid))
+                result = push.push_event(eid, force=True)
+                self.assertEqual(result['status'], 'blocked')
+                self.assertIn('当前飞书应用', result['msg'])
+                feishu.send_notice.assert_not_called()
+                feishu.send_full_card.assert_not_called()
+
+    def test_new_remote_same_name_blocks_before_notice_and_before_full_card(self):
+        eid, card = self.prepare()
+        self.confirm(eid)
+        original = self.remote_user('ou_test')
+        duplicates = [original, self.remote_user('ou_other')]
+        with patch.object(feishu, 'list_scope_users', return_value=duplicates):
+            self.assertEqual(push.push_event(eid, force=True)['status'], 'blocked')
+        feishu.send_notice.assert_not_called()
+        feishu.send_full_card.assert_not_called()
+        self.client.post(f'/api/events/{eid}/select', json={'card_id':card['id']})
+        self.confirm(eid)
+        with patch.object(feishu, 'list_scope_users', side_effect=[[original], [original], duplicates]):
+            self.assertEqual(push.push_event(eid, force=True)['status'], 'blocked')
+        feishu.send_notice.assert_called_once()
+        feishu.send_full_card.assert_not_called()
+
     def test_unapproved_force_send_is_rejected(self):
         eid, _ = self.prepare()
         result = push.push_event(eid, force=True)
         self.assertFalse(result["ok"])
-        feishu.send_card.assert_not_called()
+        feishu.send_full_card.assert_not_called()
 
     def test_complete_workflow_and_no_duplicate_even_force(self):
         eid, card = self.prepare()
         self.confirm(eid)
+        order = []
+        def notice(*args, **kwargs):
+            order.append("notice")
+            self.assertIsNone(db.query_one("SELECT pushed_at FROM events WHERE id=?", (eid,))["pushed_at"])
+            return "notice_test"
+        def full(*args, **kwargs):
+            order.append("full")
+            saved = db.query_one("SELECT * FROM events WHERE id=?", (eid,))
+            self.assertEqual(saved["notice_message_id"], "notice_test")
+            self.assertEqual(saved["status"], "pushing")
+            self.assertIsNotNone(saved["delivery_started_at"])
+            return "message_test"
+        feishu.send_notice.side_effect = notice
+        feishu.send_full_card.side_effect = full
         self.assertTrue(push.push_event(eid, force=True)["ok"])
         self.assertTrue(push.push_event(eid, force=True)["already_sent"])
-        self.assertEqual(feishu.send_card.call_count, 1)
-        self.assertEqual(feishu.send_card.call_args.args[0], "ou_test")
-        self.assertTrue(feishu.send_card.call_args.kwargs["uuid"])
+        self.assertEqual(feishu.send_full_card.call_count, 1)
+        self.assertEqual(feishu.send_full_card.call_args.args[0], "ou_test")
+        self.assertTrue(feishu.send_full_card.call_args.kwargs["uuid"])
         self.assertEqual(db.query_one("SELECT status FROM events WHERE id=?", (eid,))["status"], "pushed")
         self.assertTrue(db.query_one("SELECT recipient_snapshot FROM push_logs")["recipient_snapshot"])
+        self.assertEqual(order, ["notice", "full"])
+        feishu.send_notice.assert_called_once()
+        self.assertNotEqual(feishu.send_notice.call_args.kwargs["uuid"], feishu.send_full_card.call_args.kwargs["uuid"])
+        self.assertEqual([row["status"] for row in db.query("SELECT status FROM push_logs ORDER BY id")], ["notice_success", "success"])
+
+    def test_notice_timeout_stops_full_card_and_disallows_retry(self):
+        eid, _ = self.prepare()
+        self.confirm(eid)
+        feishu.send_notice.side_effect = TimeoutError("回执超时")
+        result = push.push_event(eid, force=True)
+        self.assertEqual(result["status"], "delivery_unknown")
+        self.assertIn("简短通知发送结果待确认", result["msg"])
+        self.assertFalse(push.push_event(eid, force=True)["ok"])
+        feishu.send_notice.assert_called_once()
+        feishu.send_full_card.assert_not_called()
+
+    def test_notice_rejection_retries_same_notice_uuid_before_full_card(self):
+        eid, _ = self.prepare()
+        self.confirm(eid)
+        feishu.send_notice.side_effect = feishu.FeishuError(230002, "无发信权限", definitive=True)
+        self.assertEqual(push.push_event(eid, force=True)["status"], "failed")
+        first_uuid = feishu.send_notice.call_args.kwargs["uuid"]
+        feishu.send_full_card.assert_not_called()
+        feishu.send_notice.side_effect = None
+        self.assertTrue(push.push_event(eid, force=True)["ok"])
+        self.assertEqual(feishu.send_notice.call_args.kwargs["uuid"], first_uuid)
+        feishu.send_full_card.assert_called_once()
+
+    def test_crash_between_messages_recovers_without_repeating_notice(self):
+        eid, _ = self.prepare()
+        self.confirm(eid)
+        real_validate = employees.validate_identity
+        def interrupted(emp):
+            if db.query_one("SELECT notice_message_id FROM events WHERE id=?", (eid,))["notice_message_id"]:
+                raise SystemExit("模拟进程在第二条请求前退出")
+            return real_validate(emp)
+        with patch.object(employees, "validate_identity", side_effect=interrupted):
+            with self.assertRaises(SystemExit):
+                push.push_event(eid, force=True)
+        self.assertIsNone(db.query_one("SELECT delivery_started_at FROM events WHERE id=?", (eid,))["delivery_started_at"])
+        with patch.object(recovery, "_pid_alive", return_value=False):
+            self.assertEqual(recovery.recover_interrupted_jobs()["failed"], 1)
+        self.assertTrue(push.push_event(eid, force=True)["ok"])
+        feishu.send_notice.assert_called_once()
+        feishu.send_full_card.assert_called_once()
+
+    def test_recipient_departure_after_notice_stops_full_card(self):
+        eid, _ = self.prepare()
+        self.confirm(eid)
+        def notice(*args, **kwargs):
+            feishu.get_user.side_effect = lambda oid: {**self.remote_user(oid), "status": {"is_resigned": True}}
+            return "notice_test"
+        feishu.send_notice.side_effect = notice
+        result = push.push_event(eid, force=True)
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("简短通知已发送", result["msg"])
+        feishu.send_full_card.assert_not_called()
+
+    def test_changed_app_cannot_resume_second_message(self):
+        eid, _ = self.prepare()
+        self.confirm(eid)
+        feishu.send_full_card.side_effect = feishu.FeishuError(230002, "无发信权限", definitive=True)
+        push.push_event(eid, force=True)
+        feishu.send_full_card.reset_mock()
+        with patch.object(feishu, "FEISHU_APP_ID", "different_app"):
+            self.assertEqual(push.push_event(eid, force=True)["status"], "blocked")
+        feishu.send_notice.assert_called_once()
+        feishu.send_full_card.assert_not_called()
 
     def test_departure_cancels_scheduled_event(self):
         eid, _ = self.prepare()
@@ -89,7 +202,7 @@ class WorkflowTests(unittest.TestCase):
         employees.deactivate([self.emp["id"]])
         self.assertEqual(db.query_one("SELECT status FROM events WHERE id=?", (eid,))["status"], "skipped")
         self.assertFalse(push.push_event(eid, force=True)["ok"])
-        feishu.send_card.assert_not_called()
+        feishu.send_full_card.assert_not_called()
         self.assertEqual(push.due_events(), [])
 
     def test_department_change_invalidates_old_card(self):
@@ -100,7 +213,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(event["status"], "needs_regeneration")
         self.assertIsNone(event["selected_card_id"])
         self.assertFalse(push.push_event(eid, force=True)["ok"])
-        feishu.send_card.assert_not_called()
+        feishu.send_full_card.assert_not_called()
 
     def test_remote_identity_changed_before_send_blocks(self):
         eid, _ = self.prepare()
@@ -109,7 +222,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(push.push_event(eid, force=True)["ok"])
         self.assertEqual(db.query_one("SELECT status FROM events WHERE id=?", (eid,))["status"], "blocked")
         feishu.upload_image.assert_not_called()
-        feishu.send_card.assert_not_called()
+        feishu.send_full_card.assert_not_called()
 
     def test_remote_departure_during_upload_blocks(self):
         eid, _ = self.prepare()
@@ -119,15 +232,15 @@ class WorkflowTests(unittest.TestCase):
             return "image_test"
         feishu.upload_image.side_effect = upload
         self.assertFalse(push.push_event(eid, force=True)["ok"])
-        feishu.send_card.assert_not_called()
+        feishu.send_full_card.assert_not_called()
 
     def test_timeout_is_unknown_and_never_automatically_resent(self):
         eid, _ = self.prepare()
         self.confirm(eid)
-        feishu.send_card.side_effect = TimeoutError("回执超时")
+        feishu.send_full_card.side_effect = TimeoutError("回执超时")
         self.assertEqual(push.push_event(eid, force=True)["status"], "delivery_unknown")
         self.assertFalse(push.push_event(eid, force=True)["ok"])
-        self.assertEqual(feishu.send_card.call_count, 1)
+        self.assertEqual(feishu.send_full_card.call_count, 1)
         self.assertEqual(push.due_events(), [])
 
     def test_expired_event_cannot_be_sent_even_force(self):
@@ -136,15 +249,19 @@ class WorkflowTests(unittest.TestCase):
         with patch.object(push, "now", return_value="2026-09-11 00:01:00"):
             self.assertFalse(push.push_event(eid, force=True)["ok"])
         self.assertEqual(db.query_one("SELECT status FROM events WHERE id=?", (eid,))["status"], "expired")
-        feishu.send_card.assert_not_called()
+        feishu.send_full_card.assert_not_called()
 
     def test_definite_rejection_can_retry_after_fix(self):
         eid, _ = self.prepare()
         self.confirm(eid)
-        feishu.send_card.side_effect = feishu.FeishuError(230002, "无发信权限", definitive=True)
+        feishu.send_full_card.side_effect = feishu.FeishuError(230002, "无发信权限", definitive=True)
         self.assertEqual(push.push_event(eid, force=True)["status"], "failed")
-        feishu.send_card.side_effect = None
+        first_uuid = feishu.send_full_card.call_args.kwargs["uuid"]
+        self.assertIsNone(db.query_one("SELECT pushed_at FROM events WHERE id=?", (eid,))["pushed_at"])
+        feishu.send_full_card.side_effect = None
         self.assertTrue(push.push_event(eid, force=True)["ok"])
+        feishu.send_notice.assert_called_once()
+        self.assertEqual(feishu.send_full_card.call_args.kwargs["uuid"], first_uuid)
 
     def test_scan_then_weekly_still_generates(self):
         cycle = (date(2026, 9, 10), date(2026, 9, 10))
@@ -163,6 +280,42 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(event["status"], "gen_failed")
         self.assertIsNone(event["generation_token"])
 
+    def test_weekly_submission_failure_is_reported_and_remains_retryable(self):
+        with patch.object(pipeline._async_pool, "submit", side_effect=RuntimeError("关闭中")):
+            with self.assertRaisesRegex(ValueError, "提交失败"):
+                pipeline.run_weekly_async((date(2026, 9, 10), date(2026, 9, 10)))
+        pending = pipeline._pending_generation(date(2026, 9, 10), date(2026, 9, 10))
+        self.assertEqual(len(pending), 2)
+
+    def test_weekly_render_failure_is_present_in_task_result(self):
+        with patch.object(pipeline._async_pool, "submit", side_effect=lambda work: work()), \
+                patch.object(pipeline, "generate_for_event", return_value=0):
+            _, task = pipeline.run_weekly_async((date(2026, 9, 10), date(2026, 9, 10)))
+        self.assertEqual(task["generated"], 0)
+        self.assertEqual(len(task["errors"]), 2)
+
+    def test_health_reports_missing_birthday_and_loaded_delivery_flow(self):
+        db.execute("UPDATE employees SET birth_date=NULL WHERE id=?", (self.emp["id"],))
+        with patch.object(main.feishu_config, "check_connection", return_value={'ok':False, 'msg':'缺少读取用户组权限'}):
+            result = self.client.get('/api/health').json()
+        self.assertEqual(result['missing_fields'], {'birthday':1, 'join_date':0, 'feishu_id':0})
+        self.assertEqual(result['delivery_flow'], 'notice_then_full_card')
+        self.assertEqual(result['recipient_rule'], 'unique_exact_name_and_open_id')
+        self.assertEqual(result['feishu'], {'ok':False, 'error':'缺少读取用户组权限'})
+
+    def test_scheduler_sends_only_confirmed_due_tasks_once(self):
+        eid, _ = self.prepare()
+        self.confirm(eid)
+        db.execute("UPDATE events SET trigger_at='2026-09-10 13:00:00' WHERE id=?", (eid,))
+        scheduler.push_job()
+        feishu.send_notice.assert_not_called()
+        with patch.object(push, 'now', return_value='2026-09-10 13:01:00'):
+            scheduler.push_job()
+            scheduler.push_job()
+        feishu.send_notice.assert_called_once()
+        feishu.send_full_card.assert_called_once()
+        self.assertEqual(db.query_one('SELECT status FROM events WHERE id=?', (eid,))['status'], 'pushed')
+
     def test_concurrent_clicks_send_once_and_block_employee_edit(self):
         eid, _ = self.prepare()
         self.confirm(eid)
@@ -171,7 +324,7 @@ class WorkflowTests(unittest.TestCase):
             started.set()
             self.assertTrue(finish.wait(5))
             return "message_test"
-        feishu.send_card.side_effect = send
+        feishu.send_full_card.side_effect = send
         with ThreadPoolExecutor(max_workers=2) as pool:
             future = pool.submit(push.push_event, eid, force=True)
             self.assertTrue(started.wait(5))
@@ -180,7 +333,7 @@ class WorkflowTests(unittest.TestCase):
                 employees.deactivate([self.emp["id"]])
             finish.set()
             self.assertTrue(future.result()["ok"])
-        self.assertEqual(feishu.send_card.call_count, 1)
+        self.assertEqual(feishu.send_full_card.call_count, 1)
 
     def test_dry_run_is_not_marked_delivered(self):
         eid, _ = self.prepare()
@@ -191,7 +344,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(event["status"], "simulated")
         self.assertIsNone(event["pushed_at"])
         feishu.upload_image.assert_not_called()
-        feishu.send_card.assert_not_called()
+        feishu.send_full_card.assert_not_called()
+
+        feishu.send_notice.assert_not_called()
 
     def test_cross_event_card_is_rejected(self):
         eid, _ = self.prepare()

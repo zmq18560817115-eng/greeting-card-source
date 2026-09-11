@@ -125,7 +125,7 @@ function renderEventDetails(e){
   return `<article class="event-review">
     <div class="review-heading"><strong>${esc(emp.name||'员工资料不可用')}</strong><span class="badge">${esc(e.event_type==='birthday'?'生日':e.event_type==='anniversary'?'入职周年':e.event_type)}</span>${badge(ReviewStatus.of(e),ReviewStatus.labels)}<span class="meta">${esc(e.event_date)}${e.years!=null?' · '+esc(e.years)+(e.event_type==='birthday'?' 岁':' 周年'):''}</span></div>
     <div class="review-layout"><div class="review-information">
-      <dl class="review-facts"><div><dt>工号</dt><dd>${esc(emp.employee_no||'未填写')}</dd></div><div><dt>部门</dt><dd>${esc(emp.department||'未填写')}</dd></div><div><dt>入职日期</dt><dd>${esc(emp.join_date||'未填写')}</dd></div><div><dt>生日</dt><dd>${esc(emp.birth_date_display||emp.birth_date||'未填写')}</dd></div><div><dt>入职周年数 · 自动计算</dt><dd>${esc(anniversaryText(e.anniversary_years))}</dd></div><div><dt>员工 ID</dt><dd>${esc(emp.id??'未记录')}</dd></div><div><dt>是否推送</dt><dd>${badge(deliveryState(e),DELIVERY)}</dd></div><div class="full"><dt>飞书 ID</dt><dd class="review-open-id">${esc(openId(emp)||'未填写')}</dd></div><div class="full"><dt>推送日期</dt><dd class="audit-stacked">${pushDates(e)}</dd></div></dl>
+      <dl class="review-facts"><div><dt>工号</dt><dd>${esc(emp.employee_no||'未填写')}</dd></div><div><dt>部门</dt><dd>${esc(emp.department||'未填写')}</dd></div><div><dt>入职日期</dt><dd>${esc(emp.join_date||'未填写')}</dd></div><div><dt>生日</dt><dd>${esc(emp.birth_date_display||emp.birth_date||'未填写')}</dd></div><div><dt>入职周年数 · 自动计算</dt><dd>${esc(anniversaryText(e.anniversary_years))}</dd></div><div><dt>员工 ID</dt><dd>${esc(emp.id??'未记录')}</dd></div><div><dt>是否推送</dt><dd>${badge(deliveryState(e),DELIVERY)}</dd></div><div class="full"><dt>飞书 open_id</dt><dd class="review-open-id">${esc(openId(emp)||'未填写')}</dd></div><div class="full"><dt>推送日期</dt><dd class="audit-stacked">${pushDates(e)}</dd></div></dl>
       <p class="review-instruction">${esc(instruction||'可查看海报和推送记录。')}</p>
       ${e.exception_hint?`<p class="error">异常提醒：${esc(e.exception_hint)}</p>`:''}
       ${e.last_error||emp.identity_error?`<details class="review-error"><summary>技术详情</summary><p class="error">${esc([e.last_error,emp.identity_error].filter(Boolean).join('\n'))}</p></details>`:''}
@@ -164,7 +164,7 @@ function renderEvents(){
   EVENTS.sort((a,b)=>direction*String(a.event_date).localeCompare(String(b.event_date)));
   EVENT_SELECTED=new Set([...EVENT_SELECTED].filter(id=>EVENTS.some(e=>sameId(e.id,id))));
   $('#evsum').textContent=EVENTS.length+' 条记录';
-  $('#events').innerHTML='<div class="table-wrap audit-table-wrap"><table class="data-table audit-table"><thead><tr><th class="check-col"><input type="checkbox" id="event-all" aria-label="选择当前筛选的全部海报"></th><th class="audit-person">姓名</th><th>工号</th><th>部门</th><th>入职日期</th><th>生日</th><th title="根据入职日期自动计算，截至本条贺卡日期已满的周年数，无需导入">入职周年数 ⓘ</th><th>飞书 ID</th><th>贺卡 / 日期</th><th>推送状态</th><th>推送日期</th><th>异常提醒</th><th>海报</th><th>操作</th></tr></thead><tbody>'+EVENTS.map((e,i)=>{
+  $('#events').innerHTML='<div class="table-wrap audit-table-wrap"><table class="data-table audit-table"><thead><tr><th class="check-col"><input type="checkbox" id="event-all" aria-label="选择当前筛选的全部海报"></th><th class="audit-person">姓名</th><th>工号</th><th>部门</th><th>入职日期</th><th>生日</th><th title="根据入职日期自动计算，截至本条贺卡日期已满的周年数，无需导入">入职周年数 ⓘ</th><th>飞书 open_id</th><th>贺卡 / 日期</th><th>推送状态</th><th>推送日期</th><th>异常提醒</th><th>海报</th><th>操作</th></tr></thead><tbody>'+EVENTS.map((e,i)=>{
     const card=previewCard(e),url=card&&fileURL(card.url),emp=e.employee||{};
     return `<tr class="${EVENT_SELECTED.has(String(e.id))?'is-selected':''}"><td class="selection-cell"><input type="checkbox" aria-describedby="event-selection-help" data-event-check="${esc(e.id)}" aria-label="选择${esc(emp.name)}的海报" ${EVENT_SELECTED.has(String(e.id))?'checked':''}></td><td class="audit-person"><button class="person-link" data-action="detail" data-id="${esc(e.id)}">${esc(emp.name||'未知员工')}</button><small class="muted">员工 ID：${esc(emp.id??'—')}</small></td><td>${esc(emp.employee_no||'—')}</td><td>${esc(emp.department||'—')}</td><td>${esc(emp.join_date||'未填写')}</td><td>${esc(emp.birth_date_display||emp.birth_date||'未填写')}</td><td title="截至 ${esc(e.event_date)}，由入职日期自动计算">${esc(anniversaryText(e.anniversary_years))}</td><td class="id-cell" title="${esc(openId(emp))}">${esc(openId(emp)||'未绑定')}</td><td class="audit-stacked"><span class="type-tag ${e.event_type==='birthday'?'birthday':'anniversary'}">${e.event_type==='birthday'?'生日':'入职周年'}</span><small class="muted">${esc(e.event_date)}</small></td><td>${badge(ReviewStatus.of(e),ReviewStatus.labels)}</td><td class="audit-stacked audit-push-dates">${pushDates(e)}</td><td class="audit-notice">${ReviewStatus.note(e)?`<button class="audit-notice-link" data-action="detail" data-id="${esc(e.id)}" title="${esc(ReviewStatus.note(e))}">${esc(ReviewStatus.note(e))}</button>`:'<span class="muted">—</span>'}</td><td class="audit-poster-cell">${url?`<button class="audit-poster-image" data-zoom="${esc(url)}" aria-label="放大${esc(emp.name)}的海报"><img src="${esc(url)}" alt="${esc(emp.name)}海报缩略图" loading="lazy"></button>`:'<span class="muted" aria-label="尚无可用海报">—</span>'}</td><td class="row-actions"><div class="bar">${eventButton('detail',e.id,'核查',true)}${canConfirm(e)?eventButton('confirm',e.id,'确认',true):canPush(e)?eventButton('push',e.id,'推送',true):''}</div></td></tr>`;
   }).join('')+(EVENTS.length?'':'<tr><td colspan="14" class="empty">当前筛选下暂无海报</td></tr>')+'</tbody></table></div>';
@@ -219,7 +219,7 @@ async function freshEvent(id){
   if(!Array.isArray(employees)||!sameId(event.id,id))throw new Error('无法确认最新事件或员工资料，请刷新后重试');
   return {...event,employee:employees.find(e=>sameId(e.id,event.employee_id??event.employee?.id))};
 }
-function recipient(e){return `${e.employee?.name||'未知员工'} ｜ ${e.employee?.department||'未填部门'} ｜ ${openId(e.employee)||'未填飞书 ID'} ｜ ${e.event_date||''}`;}
+function recipient(e){return `${e.employee?.name||'未知员工'} ｜ ${e.employee?.department||'未填部门'} ｜ ${openId(e.employee)||'未填飞书 open_id'} ｜ ${e.event_date||''}`;}
 function reviewSnapshot(e){const card=previewCard(e);return JSON.stringify([e.id,e.status,e.employee?.id,e.employee?.name,e.employee?.department,openId(e.employee),e.employee?.join_date,e.employee?.birth_date,e.event_date,e.trigger_at,e.selected_card_id,card?.id,card?.url]);}
 async function unchangedEvent(e,allowed){const latest=await freshEvent(e.id);if(!allowed(latest)||reviewSnapshot(e)!==reviewSnapshot(latest))throw new Error('员工、图片或事件状态已变化，请刷新后重新审核');return latest;}
 async function eventAction(action,id){
@@ -229,7 +229,7 @@ async function eventAction(action,id){
       const base='/api/events/'+encodeURIComponent(id);
       if(action==='detail'){showEventDetail(cached);return;}
       if(action==='logs'){
-        if(EVENT_LOGS.has(String(id)))EVENT_LOGS.delete(String(id));else{const rows=await api(base+'/logs');if(!Array.isArray(rows))throw new Error('推送记录格式错误');EVENT_LOGS.set(String(id),rows.length?rows.map(r=>`${r.created_at||''}  第 ${r.attempt??''} 次  ${r.status||''}\n操作人：${r.operator||'—'}  消息 ID：${r.message_id||'—'}\n${r.error||r.msg||''}`).join('\n\n'):'暂无推送记录');}showEventDetail(cached);return;
+        if(EVENT_LOGS.has(String(id)))EVENT_LOGS.delete(String(id));else{const rows=await api(base+'/logs');if(!Array.isArray(rows))throw new Error('推送记录格式错误');EVENT_LOGS.set(String(id),rows.length?rows.map(r=>`${r.created_at||''}  第 ${r.attempt??''} 次  ${({notice_success:'简短通知已发送',success:'完整贺卡已发送',simulated:'演练完成',failed:'推送失败',delivery_unknown:'发送结果待确认',blocked:'已暂停推送'})[r.status]||r.status||''}\n操作人：${r.operator||'—'}  消息 ID：${r.message_id||'—'}\n${r.error||r.msg||''}`).join('\n\n'):'暂无推送记录');}showEventDetail(cached);return;
       }
       const ev=await freshEvent(id);
       if(action==='confirm'){
@@ -338,9 +338,9 @@ $('#import-employees').onclick=()=>busy('staff','staff',async()=>{
   $('#csv').value='';await loadStaff();
 });
 $('#sync-employees').onclick=()=>busy('staff','staff',async()=>{
-  if(!await askConfirm('同步飞书员工名单','同步会新增、更新或停用本地员工资料。系统会按唯一姓名自动对应飞书 ID，请核对同步结果。',[],'开始同步'))return;
+  if(!await askConfirm('同步飞书员工名单','同步会新增、更新或停用本地员工资料。系统会按唯一姓名自动对应飞书 open_id，请核对同步结果。',[],'开始同步'))return;
   const r=await post('/api/sync',{fill_birthday:true});const errors=Array.isArray(r.errors)?r.errors:[];
-  report('staff',r.ok===false||errors.length?'飞书同步部分完成，成功项已提交':'飞书同步完成',[`新增 ${r.added??0}，更新 ${r.updated??0}，停用 ${r.disabled??0}`,...errors.map(message),...(r.ok===false&&!errors.length?[message(r.msg||'接口报告部分失败，请核对名单。')]:[]),...bindingDetails(r)],r.ok===false||errors.length>0||Boolean(r.binding?.errors?.length));await loadStaff();
+  report('staff',r.ok===false||errors.length?'飞书同步部分完成，成功项已提交':'飞书同步完成',[`新增 ${r.added??0}，更新 ${r.updated??0}，停用 ${r.disabled??0}`,...errors.map(message),...(r.warnings||[]),...(r.ok===false&&!errors.length?[message(r.msg||'接口报告部分失败，请核对名单。')]:[]),...bindingDetails(r)],r.ok===false||errors.length>0||Boolean(r.warnings?.length)||Boolean(r.binding?.errors?.length));await loadStaff();
 });
 let savedFeishuAppId='';
 async function loadFeishuConfig(){
@@ -372,7 +372,7 @@ $('#test-feishu-connection').onclick=()=>busy('feishu','sys',async()=>{
   finally{$('#feishu-config-fields').disabled=false;}
 });
 async function loadHealth(){
-  $('#run-mode').textContent='正在检查…';try{const h=await api('/api/health');$('#run-mode').textContent=h.dry_run===true?'当前为演练模式：完成后记录为「演练完成」，未向飞书发送消息。':h.dry_run===false?'当前为正式模式：确认发送排期后会按计划推送；立即推送需再次确认。':'运行模式未知，请核对服务端配置。';$('#health').textContent=JSON.stringify(h,null,2);}catch(error){$('#run-mode').textContent='检查失败';$('#health').textContent=error.message;}
+  $('#run-mode').textContent='正在检查…';try{const h=await api('/api/health');$('#run-mode').textContent=h.dry_run===true?'当前为演练模式：完成后记录为「演练完成」，未向飞书发送消息。':h.dry_run===false?'当前为正式模式：按计划先发送简短通知，再自动发送完整贺卡，员工无需确认。立即推送需管理员确认。':'运行模式未知，请核对服务端配置。';$('#data-quality').textContent=h.missing_fields?`在职员工资料缺失：生日 ${h.missing_fields.birthday} 人，入职日期 ${h.missing_fields.join_date} 人，飞书 open_id ${h.missing_fields.feishu_id} 人。缺少对应日期的员工不会生成该类贺卡；缺少飞书 open_id 无法推送。`:'';$('#health').textContent=JSON.stringify(h,null,2);}catch(error){$('#run-mode').textContent='检查失败';$('#health').textContent=error.message;}
 }
 $('#check-health').onclick=loadHealth;
 setInterval(async()=>{

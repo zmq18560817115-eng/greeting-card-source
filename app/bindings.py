@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from . import db, employees, feishu
 
 
+@feishu.in_application
 def auto_bind(ids=None, *, users=None):
     result = {"matched": 0, "pending": 0, "errors": [], "msg": ""}
     rows = db.query("SELECT * FROM employees WHERE active=1 ORDER BY id")
@@ -22,6 +23,7 @@ def auto_bind(ids=None, *, users=None):
         except Exception as exc:
             result.update(pending=len(rows), msg="资料已保存，暂未完成飞书对应：" + feishu.connection_error(exc))
             return result
+    users = list(users)
     by_name, by_id = defaultdict(dict), defaultdict(list)
     for user in users:
         if (isinstance(user, Mapping) and isinstance(user.get("name"), str) and user["name"].strip()
@@ -55,7 +57,7 @@ def auto_bind(ids=None, *, users=None):
                 result["errors"].append({"id": row["id"], "name": row["name"], "msg": reason})
                 continue
             candidate = candidates[0]
-            outcome = employees.verify_employee(row["id"], open_id=candidate["open_id"], remote_user=candidate)
+            outcome = employees.verify_employee(row["id"], open_id=candidate["open_id"], remote_user=candidate, directory_users=users)
             if outcome["ok"]:
                 result["matched"] += 1
             else:

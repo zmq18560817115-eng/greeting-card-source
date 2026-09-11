@@ -31,11 +31,14 @@ def _ts_to_date(ts):
         return None
 
 
-def _birthday_attr_ids():
+def _birthday_attr_ids(warnings=None):
     try:
         attrs = feishu.list_custom_attrs()
     except Exception as exc:
-        log.info("读不到企业自定义字段，跳过生日回填：%s", exc)
+        hint = feishu.connection_error(exc)
+        log.info("读不到企业自定义字段，跳过生日回填：%s", hint)
+        if warnings is not None:
+            warnings.append("生日未同步：无法读取飞书自定义字段。" + hint)
         return set()
     ids = set()
     for attr in attrs:
@@ -45,6 +48,8 @@ def _birthday_attr_ids():
             label = " ".join(str(n.get("value") or "") for n in names if isinstance(n, Mapping)) or label
         if attr.get("id") and any(hint in str(label).lower() for hint in BIRTHDAY_ATTR_HINTS):
             ids.add(attr["id"])
+    if not ids and warnings is not None:
+        warnings.append("生日未同步：飞书未返回可识别的生日或出生日期字段。请确认字段的数据来源和开放设置，或使用员工名单模板补全。")
     return ids
 
 
@@ -135,12 +140,14 @@ def _sync_user(user, attr_ids):
         return ("updated" if current else "added"), None
 
 
+@feishu.in_application
 def sync_from_feishu(fill_birthday=True):
     # Materialize before any writes: iteration failure cannot commit a partial run.
     users = list(feishu.list_users())
-    attr_ids = _birthday_attr_ids() if fill_birthday else set()
+    warnings = []
+    attr_ids = _birthday_attr_ids(warnings) if fill_birthday else set()
     result = {"ok": True, "total_from_feishu": len(users), "added": 0, "updated": 0,
-              "disabled": 0, "skipped": 0, "errors": []}
+              "disabled": 0, "skipped": 0, "errors": [], "warnings": warnings}
     by_id = {}
     by_name = {}
     for user in users:

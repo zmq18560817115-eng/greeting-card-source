@@ -397,7 +397,7 @@ def resolve_departments(user):
     return departments
 
 
-def _validate_identity(emp, remote_user=None):
+def _validate_identity(emp, remote_user=None, directory_users=None):
     """Read-only live verification; return evidence or raise IdentityError.
 
     Does not consult or mutate cached verification state. Callers must compare
@@ -405,7 +405,7 @@ def _validate_identity(emp, remote_user=None):
     """
     emp = dict(emp)
     evidence = {"checked_at": db.now(), "local": {k: emp.get(k) for k in ("id", "name", "department", "feishu_open_id")},
-                "rule": "unique_exact_name_and_open_id"}
+                "rule": "unique_exact_name_and_open_id", "app_id": feishu.FEISHU_APP_ID}
 
     def fail(message, code):
         raise IdentityError(message, code, evidence)
@@ -415,11 +415,16 @@ def _validate_identity(emp, remote_user=None):
     open_id = emp.get("feishu_open_id")
     if not isinstance(open_id, str) or not open_id.strip():
         fail("缺少飞书 open_id", "missing_open_id")
+    if not open_id.startswith("ou_") or open_id.strip() != open_id:
+        fail("飞书收件人必须使用当前应用的 open_id（ou_ 开头），不能填写 user_id 或部门 ID", "invalid_open_id")
     if not isinstance(emp.get("name"), str) or not emp["name"].strip():
         fail("缺少员工姓名", "missing_name")
     duplicates = db.query("SELECT id FROM employees WHERE name=? AND id<>?", (emp["name"], emp.get("id", -1)))
     if duplicates:
         fail("存在同名员工，姓名无法唯一对应飞书 ID，请先处理重复姓名", "ambiguous_employee")
+    owner = db.query_one("SELECT id FROM employees WHERE feishu_open_id=? AND id<>?", (open_id, emp.get("id", -1)))
+    if owner:
+        fail("该 open_id 已对应其他员工，停止推送", "identifier_conflict")
     try:
         user = remote_user if remote_user is not None else feishu.get_user(open_id)
     except feishu.FeishuError as exc:
@@ -441,15 +446,34 @@ def _validate_identity(emp, remote_user=None):
             fail("飞书在职状态无效", "invalid_user_status")
         if status.get(key) is True:
             fail("飞书用户已离职、冻结或退出", "inactive_feishu_user")
+    try:
+        directory = list(directory_users) if directory_users is not None else feishu.list_scope_users()
+    except Exception as exc:
+        raise IdentityError(feishu.connection_error(exc), "directory_unavailable", evidence) from exc
+    matching_ids = set()
+    for item in directory:
+        if not isinstance(item, Mapping) or not isinstance(item.get("name"), str) or not item["name"].strip() or not item.get("open_id"):
+            fail("飞书通讯录缺少姓名或 open_id，无法确认一一对应", "invalid_directory")
+        if item["open_id"] == open_id and item["name"] != emp["name"]:
+            fail("同一 open_id 返回不同姓名，停止推送", "conflicting_directory_rows")
+        if item["name"] == emp["name"]:
+            matching_ids.add(item["open_id"])
+    if len(matching_ids) > 1:
+        fail("飞书通讯录中存在同名人员，无法唯一对应 open_id，停止推送", "ambiguous_feishu_name")
+    if matching_ids != {open_id}:
+        fail("授权通讯录未找到一致的姓名和 open_id，停止推送", "recipient_not_in_directory")
+    evidence["directory_unique"] = True
     return evidence
 
 
+@feishu.in_application
 def validate_identity(emp):
     """Return {ok: True, evidence}; failure raises IdentityError. Never writes."""
     return {"ok": True, "evidence": _validate_identity(emp)}
 
 
-def verify_employee(employee_id, open_id=None, *, remote_user=None):
+@feishu.in_application
+def verify_employee(employee_id, open_id=None, *, remote_user=None, directory_users=None):
     """Explicitly verify/bind an id; failed checks revoke old approval and cards.
 
     Network calls happen outside the write lock. The saved employee is compared
@@ -468,7 +492,7 @@ def verify_employee(employee_id, open_id=None, *, remote_user=None):
         candidate["feishu_open_id"] = open_id.strip()
     failure = None
     try:
-        evidence = _validate_identity(candidate, remote_user=remote_user)
+        evidence = _validate_identity(candidate, remote_user=remote_user, directory_users=directory_users)
     except IdentityError as exc:
         failure, evidence = exc, exc.evidence
     with db.tx() as conn:
@@ -485,7 +509,7 @@ def verify_employee(employee_id, open_id=None, *, remote_user=None):
             except EmployeeError as exc:
                 failure = IdentityError(str(exc), exc.code, evidence)
         if failure is not None:
-            status = "unavailable" if failure.code in ("user_unavailable", "department_unavailable") else "failed"
+            status = "unavailable" if failure.code in ("user_unavailable", "department_unavailable", "directory_unavailable") else "failed"
             _reset_identity(conn, employee_id, str(failure), status, evidence)
             _invalidate_events(conn, employee_id, "飞书对应异常：" + str(failure), deactivate=not current["active"])
             return {"ok": False, "id": employee_id, "open_id": original.get("feishu_open_id"),
@@ -499,6 +523,7 @@ def verify_employee(employee_id, open_id=None, *, remote_user=None):
     return {"ok": True, "id": employee_id, "open_id": candidate["feishu_open_id"], "evidence": evidence}
 
 
+@feishu.in_application
 def match_employee(employee_id):
     """Return explicit candidates, including rejection reasons; never bind."""
     employee_id = _id(employee_id)
@@ -521,7 +546,7 @@ def match_employee(employee_id):
         item = {"open_id": open_id, "name": user["name"], "employee_no": user.get("employee_no"),
                 "eligible": False, "department": ""}
         try:
-            evidence = _validate_identity({**emp, "feishu_open_id": open_id})
+            evidence = _validate_identity({**emp, "feishu_open_id": open_id}, directory_users=users)
             owner = db.query_one("SELECT id FROM employees WHERE feishu_open_id=? AND id<>?", (open_id, employee_id))
             item.update(evidence=evidence)
             if owner:

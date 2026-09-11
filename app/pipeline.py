@@ -181,12 +181,20 @@ def run_weekly_async(cycle=None, today=None):
     def work():
         for eid in pending:
             try:
-                task["generated"] += int(bool(generate_for_event(eid)))
+                generated = bool(generate_for_event(eid))
+                task["generated"] += int(generated)
+                if not generated:
+                    task["errors"].append({"event_id": eid, "msg": "海报未成功生成，请查看该事件的异常原因"})
             except Exception as exc:
                 task["errors"].append({"event_id": eid, "msg": str(exc)})
             task["done"] += 1
         task["status"] = "done"
-    _async_pool.submit(work)
+    try:
+        _async_pool.submit(work)
+    except Exception:
+        task["status"] = "failed"
+        task["error"] = "后台生成任务提交失败，请稍后重新扫描"
+        raise ValueError(task["error"])
     return tid, task
 
 

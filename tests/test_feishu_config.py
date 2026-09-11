@@ -52,6 +52,24 @@ class FeishuConfigTests(unittest.TestCase):
             feishu_config.save_config("cli_other", "")
         self.assertEqual(self.path.read_bytes(), before)
 
+    def test_credentials_cannot_change_during_recipient_operation(self):
+        @feishu.in_application
+        def check():
+            with self.assertRaisesRegex(ValueError, '正在读取通讯录或执行推送'):
+                feishu_config.save_config('cli_example', 'secret-for-test')
+            self.assertFalse(self.path.exists())
+        check()
+        feishu_config.save_config('cli_example', 'secret-for-test')
+        self.assertEqual(feishu.FEISHU_APP_ID, 'cli_example')
+
+    def test_missing_group_permission_cannot_report_connection_ready(self):
+        with patch.object(feishu, 'tenant_access_token', return_value='test-token'), \
+             patch.object(feishu, '_get', side_effect=[{'data': {'group_ids':['g1']}},
+                feishu.FeishuError(99991672, 'contact:group:readonly')]):
+            result = feishu_config.check_connection()
+        self.assertFalse(result['ok'])
+        self.assertIn('读取用户组', result['msg'])
+
     def test_reject_invalid_or_multiline_credentials_without_writing(self):
         for app_id, secret in (("invalid", "secret"), ("cli_example", ""),
                                ("cli_example", "secret\nDRY_RUN=false"), (None, "secret")):

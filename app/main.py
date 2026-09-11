@@ -23,6 +23,7 @@ app = FastAPI(title="员工贺卡推送系统", docs_url="/docs")
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/files", StaticFiles(directory=OUTPUT_DIR), name="files")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+SERVICE_STARTED_AT = now()
 
 
 def auth(x_admin_token: str = Header(default=""), token: str = Query(default="")):
@@ -333,15 +334,20 @@ def check_feishu_connection(_=Depends(auth)):
 @app.get("/api/health")
 def health(_=Depends(auth)):
     start, end = next_cycle()
-    feishu_ok, feishu_err = True, None
-    try:
-        feishu.ping()
-    except Exception as exc:
-        feishu_ok, feishu_err = False, str(exc)
+    connection = feishu_config.check_connection()
+    feishu_ok = connection["ok"]
+    feishu_err = None if feishu_ok else connection["msg"]
+    missing = query_one("""SELECT
+        COUNT(CASE WHEN COALESCE(birth_date,'')='' THEN 1 END) AS birthday,
+        COUNT(CASE WHEN COALESCE(join_date,'')='' THEN 1 END) AS join_date,
+        COUNT(CASE WHEN COALESCE(feishu_open_id,'')='' THEN 1 END) AS feishu_id
+        FROM employees WHERE active=1""")
     return {"dry_run": DRY_RUN, "next_cycle": [start.isoformat(), end.isoformat()],
             "employees_active": query_one("SELECT COUNT(*) c FROM employees WHERE active=1")["c"],
             "event_stats": {r["status"]: r["c"] for r in query("SELECT status,COUNT(*) c FROM events GROUP BY status")},
-            "jobs": scheduler.jobs(), "feishu": {"ok": feishu_ok, "error": feishu_err}}
+            "jobs": scheduler.jobs(), "feishu": {"ok": feishu_ok, "error": feishu_err},
+            "missing_fields": missing, "started_at": SERVICE_STARTED_AT,
+            "delivery_flow": "notice_then_full_card", "recipient_rule": "unique_exact_name_and_open_id"}
 
 
 @app.exception_handler(ValueError)
