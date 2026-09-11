@@ -98,33 +98,29 @@ function identityProblem(emp){
 }
 function terminal(e){return Boolean(e.pushed_at) || ['pushed','pushing','delivery_unknown','expired'].includes(e.status);}
 function selectedCard(e){return (e.cards||[]).find(c=>sameId(c.id,e.selected_card_id) && c.status==='ok' && fileURL(c.url));}
-function canConfirm(e){return e.status==='ready'&&!terminal(e)&&!identityProblem(e.employee)&&Boolean(selectedCard(e)||(e.cards||[]).find(c=>c.status==='ok'&&fileURL(c.url)));}
+function previewCard(e){
+  // Keep the confirmed/sent poster; never replace a missing selection with a different legacy option.
+  if(e.selected_card_id!=null||terminal(e))return selectedCard(e);
+  return (e.cards||[]).find(c=>c.status==='ok'&&fileURL(c.url));
+}
+function canConfirm(e){return e.status==='ready'&&!terminal(e)&&!identityProblem(e.employee)&&Boolean(previewCard(e));}
 function canPush(e){return ['confirmed','failed'].includes(e.status)&&!terminal(e)&&!identityProblem(e.employee)&&Boolean(selectedCard(e));}
 function canRegen(e){return !terminal(e)&&['ready','confirmed','failed','gen_failed','blocked','needs_regeneration','simulated'].includes(e.status)&&isActive(e.employee);}
 function canSkip(e){return !terminal(e)&&['ready','confirmed','failed','gen_failed','blocked','needs_regeneration'].includes(e.status);}
-function canSelect(e){return ['ready','confirmed','failed','blocked','simulated'].includes(e.status)&&!terminal(e)&&isActive(e.employee);}
 function eventButton(action,id,text,enabled,primary=false){return `<button data-action="${action}" data-id="${esc(id)}" data-locked="${!enabled}" ${enabled?'':'disabled'} class="${primary?'primary':''}">${text}</button>`;}
 function renderEventDetails(e){
-  const emp=e.employee||{},reason=identityProblem(emp),cards=Array.isArray(e.cards)?e.cards:[];
-  const preview=selectedCard(e)||cards.find(c=>c.status==='ok'&&fileURL(c.url));
-  const selected=preview&&sameId(preview.id,e.selected_card_id);
-  const choose=c=>canSelect(e)?`<button class="select-card" data-action="select" data-id="${esc(e.id)}" data-card="${esc(c.id)}" data-locked="${sameId(c.id,e.selected_card_id)}" ${sameId(c.id,e.selected_card_id)?'disabled':''}>${sameId(c.id,e.selected_card_id)?'已选中':'选用'}</button>`:'';
-  const options=cards.map((c,i)=>{
-    const url=fileURL(c.url),chosen=sameId(c.id,e.selected_card_id);
-    if(c.status==='ok'&&url)return `<div class="poster-option ${chosen?'is-selected':''}"><button class="image-button" data-zoom="${esc(url)}" aria-label="放大方案 ${i+1}"><img src="${esc(url)}" alt="方案 ${i+1}" loading="lazy"></button><span>方案 ${i+1}${chosen?'<small>已选中</small>':''}</span>${chosen?'':choose(c)}</div>`;
-    return `<div class="poster-option unavailable"><span>方案 ${i+1} · ${c.status==='generating'?'生成中':'不可用'}<small>${esc(c.error||'')}</small></span></div>`;
-  }).join('');
+  const emp=e.employee||{},reason=identityProblem(emp),preview=previewCard(e);
   let instruction='';
-  if(e.status==='delivery_unknown')instruction='发送请求已发出，但回执不明。请到飞书核实员工是否已收到消息；禁止重推、选图和重新生成。';
-  else if(e.status==='pushed'||e.pushed_at)instruction='已完成推送，不能再次确认、选图、重新生成或重发。';
+  if(e.status==='delivery_unknown')instruction='发送请求已发出，但回执不明。请到飞书核实员工是否已收到消息；禁止重推和重新生成。';
+  else if(e.status==='pushed'||e.pushed_at)instruction='已完成推送，不能再次确认、重新生成或重发。';
   else if(e.status==='expired')instruction='事件日期已过期，已停止发送，不能确认或推送。';
-  else if(e.status==='ready')instruction=reason||(selectedCard(e)?'请放大核对文案和收件人，再确认发送排期。':'请先选择生成成功的海报，再确认发送排期。');
+  else if(e.status==='ready')instruction=reason||(preview?'请放大核对文案和收件人，再确认发送排期。':'当前海报不可用，请重新生成后审核。');
   else if(e.status==='needs_regeneration')instruction='员工资料已变更，请重新生成海报后再次确认。';
   else if(e.status==='blocked')instruction=reason||'核验已更新，请重新生成后再审核。';
   else if(e.status==='simulated')instruction='演练完成，未向飞书发送消息。可重新生成后再次审核。';
   else if(e.status==='gen_failed')instruction='生成失败，可查看错误原因后重新生成。';
   else if(e.status==='generating')instruction='正在生成，页面将自动更新。';
-  else if(['confirmed','failed'].includes(e.status))instruction=reason||(selectedCard(e)?'已确认收件人与海报，可立即推送。':'选定图片不可用，请重新生成并审核。');
+  else if(['confirmed','failed'].includes(e.status))instruction=reason||(selectedCard(e)?'已确认收件人与海报，可立即推送。':'当前海报不可用，请重新生成并审核。');
   const actions=terminal(e)?'':eventButton('confirm',e.id,'确认发送排期',canConfirm(e),true)+eventButton('push',e.id,e.status==='failed'?'重试推送':'立即推送',canPush(e))+eventButton('regenerate',e.id,'重新生成',canRegen(e))+eventButton('skip',e.id,'跳过本次',canSkip(e));
   return `<article class="event-review">
     <div class="review-heading"><strong>${esc(emp.name||'员工资料不可用')}</strong><span class="badge">${esc(e.event_type==='birthday'?'生日':e.event_type==='anniversary'?'入职周年':e.event_type)}</span>${badge(ReviewStatus.of(e),ReviewStatus.labels)}<span class="meta">${esc(e.event_date)}${e.years!=null?' · '+esc(e.years)+(e.event_type==='birthday'?' 岁':' 周年'):''}</span></div>
@@ -133,9 +129,8 @@ function renderEventDetails(e){
       <p class="review-instruction">${esc(instruction||'可查看海报和推送记录。')}</p>
       ${e.exception_hint?`<p class="error">异常提醒：${esc(e.exception_hint)}</p>`:''}
       ${e.last_error||emp.identity_error?`<details class="review-error"><summary>技术详情</summary><p class="error">${esc([e.last_error,emp.identity_error].filter(Boolean).join('\n'))}</p></details>`:''}
-    </div><aside class="review-posters"><p class="meta">${preview?(selected?'已选海报':'待选择海报'):'海报预览'}</p>
-      ${preview?`<button class="review-preview" data-zoom="${esc(fileURL(preview.url))}" aria-label="查看${esc(emp.name||'')}海报大图"><img src="${esc(fileURL(preview.url))}" alt="${esc(emp.name||'')}海报缩略图"></button>${cards.length===1?choose(preview):''}`:'<p class="review-no-poster">尚无可用海报</p>'}
-      ${cards.length>1||(!preview&&cards.length)?`<details class="poster-options"><summary>全部方案（${cards.length}）</summary><div>${options}</div></details>`:''}
+    </div><aside class="review-posters"><p class="meta">海报预览</p>
+      ${preview?`<button class="review-preview" data-zoom="${esc(fileURL(preview.url))}" aria-label="查看${esc(emp.name||'')}海报大图"><img src="${esc(fileURL(preview.url))}" alt="${esc(emp.name||'')}海报缩略图"></button>`:'<p class="review-no-poster">尚无可用海报</p>'}
     </aside></div>
     <div class="review-actions">${actions}${eventButton('logs',e.id,EVENT_LOGS.has(String(e.id))?'收起推送记录':'推送记录',true)}</div>
     <div class="review-logs" data-log-id="${esc(e.id)}">${EVENT_LOGS.has(String(e.id))?'<pre>'+esc(EVENT_LOGS.get(String(e.id)))+'</pre>':''}</div>
@@ -170,7 +165,7 @@ function renderEvents(){
   EVENT_SELECTED=new Set([...EVENT_SELECTED].filter(id=>EVENTS.some(e=>sameId(e.id,id))));
   $('#evsum').textContent=EVENTS.length+' 条记录';
   $('#events').innerHTML='<div class="table-wrap audit-table-wrap"><table class="data-table audit-table"><thead><tr><th class="check-col"><input type="checkbox" id="event-all" aria-label="选择当前筛选的全部海报"></th><th class="audit-person">姓名</th><th>工号</th><th>部门</th><th>入职日期</th><th>生日</th><th title="根据入职日期自动计算，截至本条贺卡日期已满的周年数，无需导入">入职周年数 ⓘ</th><th>飞书 ID</th><th>贺卡 / 日期</th><th>推送状态</th><th>推送日期</th><th>异常提醒</th><th>海报</th><th>操作</th></tr></thead><tbody>'+EVENTS.map((e,i)=>{
-    const card=selectedCard(e)||(e.cards||[]).find(c=>c.status==='ok'&&fileURL(c.url)),url=card&&fileURL(card.url),emp=e.employee||{};
+    const card=previewCard(e),url=card&&fileURL(card.url),emp=e.employee||{};
     return `<tr class="${EVENT_SELECTED.has(String(e.id))?'is-selected':''}"><td class="selection-cell"><input type="checkbox" aria-describedby="event-selection-help" data-event-check="${esc(e.id)}" aria-label="选择${esc(emp.name)}的海报" ${EVENT_SELECTED.has(String(e.id))?'checked':''}></td><td class="audit-person"><button class="person-link" data-action="detail" data-id="${esc(e.id)}">${esc(emp.name||'未知员工')}</button><small class="muted">员工 ID：${esc(emp.id??'—')}</small></td><td>${esc(emp.employee_no||'—')}</td><td>${esc(emp.department||'—')}</td><td>${esc(emp.join_date||'未填写')}</td><td>${esc(emp.birth_date_display||emp.birth_date||'未填写')}</td><td title="截至 ${esc(e.event_date)}，由入职日期自动计算">${esc(anniversaryText(e.anniversary_years))}</td><td class="id-cell" title="${esc(openId(emp))}">${esc(openId(emp)||'未绑定')}</td><td class="audit-stacked"><span class="type-tag ${e.event_type==='birthday'?'birthday':'anniversary'}">${e.event_type==='birthday'?'生日':'入职周年'}</span><small class="muted">${esc(e.event_date)}</small></td><td>${badge(ReviewStatus.of(e),ReviewStatus.labels)}</td><td class="audit-stacked audit-push-dates">${pushDates(e)}</td><td class="audit-notice">${ReviewStatus.note(e)?`<button class="audit-notice-link" data-action="detail" data-id="${esc(e.id)}" title="${esc(ReviewStatus.note(e))}">${esc(ReviewStatus.note(e))}</button>`:'<span class="muted">—</span>'}</td><td class="audit-poster-cell">${url?`<button class="audit-poster-image" data-zoom="${esc(url)}" aria-label="放大${esc(emp.name)}的海报"><img src="${esc(url)}" alt="${esc(emp.name)}海报缩略图" loading="lazy"></button>`:'<span class="muted" aria-label="尚无可用海报">—</span>'}</td><td class="row-actions"><div class="bar">${eventButton('detail',e.id,'核查',true)}${canConfirm(e)?eventButton('confirm',e.id,'确认',true):canPush(e)?eventButton('push',e.id,'推送',true):''}</div></td></tr>`;
   }).join('')+(EVENTS.length?'':'<tr><td colspan="14" class="empty">当前筛选下暂无海报</td></tr>')+'</tbody></table></div>';
   RowSelection.refresh($('#events'));updateEventSelection();
@@ -197,9 +192,9 @@ $('#event-search').oninput=renderEvents;
 function showEventDetail(e){$('#event-detail').innerHTML=renderEventDetails(e);if(!$('#event-detail-dialog').open)$('#event-detail-dialog').showModal();}
 async function ensureSelected(e){
   if(selectedCard(e))return e;
-  const cards=(e.cards||[]).filter(c=>c.status==='ok'&&fileURL(c.url));
-  if(cards.length!==1)throw new Error('请先在详情中选定海报');
-  requireOK(await post('/api/events/'+encodeURIComponent(e.id)+'/select',{card_id:cards[0].id}));
+  const card=previewCard(e);
+  if(!canConfirm(e)||!card)throw new Error('当前海报不可用，请重新生成后审核');
+  requireOK(await post('/api/events/'+encodeURIComponent(e.id)+'/select',{card_id:card.id}));
   return freshEvent(e.id);
 }
 function batchEvents(action){return busy('events','event',async()=>{
@@ -225,9 +220,9 @@ async function freshEvent(id){
   return {...event,employee:employees.find(e=>sameId(e.id,event.employee_id??event.employee?.id))};
 }
 function recipient(e){return `${e.employee?.name||'未知员工'} ｜ ${e.employee?.department||'未填部门'} ｜ ${openId(e.employee)||'未填飞书 ID'} ｜ ${e.event_date||''}`;}
-function reviewSnapshot(e){return JSON.stringify([e.id,e.status,e.employee?.id,e.employee?.name,e.employee?.department,openId(e.employee),e.employee?.join_date,e.employee?.birth_date,e.event_date,e.trigger_at,e.selected_card_id,selectedCard(e)?.url]);}
+function reviewSnapshot(e){const card=previewCard(e);return JSON.stringify([e.id,e.status,e.employee?.id,e.employee?.name,e.employee?.department,openId(e.employee),e.employee?.join_date,e.employee?.birth_date,e.event_date,e.trigger_at,e.selected_card_id,card?.id,card?.url]);}
 async function unchangedEvent(e,allowed){const latest=await freshEvent(e.id);if(!allowed(latest)||reviewSnapshot(e)!==reviewSnapshot(latest))throw new Error('员工、图片或事件状态已变化，请刷新后重新审核');return latest;}
-async function eventAction(action,id,cardId){
+async function eventAction(action,id){
   const cached=EVENTS.find(e=>sameId(e.id,id));if(!cached)return;
   return busy('events','event',async()=>{
     try{
@@ -237,10 +232,8 @@ async function eventAction(action,id,cardId){
         if(EVENT_LOGS.has(String(id)))EVENT_LOGS.delete(String(id));else{const rows=await api(base+'/logs');if(!Array.isArray(rows))throw new Error('推送记录格式错误');EVENT_LOGS.set(String(id),rows.length?rows.map(r=>`${r.created_at||''}  第 ${r.attempt??''} 次  ${r.status||''}\n操作人：${r.operator||'—'}  消息 ID：${r.message_id||'—'}\n${r.error||r.msg||''}`).join('\n\n'):'暂无推送记录');}showEventDetail(cached);return;
       }
       const ev=await freshEvent(id);
-      if(action==='select'){
-        const card=(ev.cards||[]).find(c=>sameId(c.id,cardId)&&c.status==='ok'&&fileURL(c.url));if(!canSelect(ev)||!card)throw new Error('当前状态不能选择图片，请刷新检查');requireOK(await post(base+'/select',{card_id:card.id}));toast('已选择海报');
-      }else if(action==='confirm'){
-        if(!canConfirm(ev))throw new Error('只有已核验、已选有效图片的「待确认」事件可确认');
+      if(action==='confirm'){
+        if(!canConfirm(ev))throw new Error('只有员工资料对应正常且海报可用的「待确认」事件可确认');
         if(reviewSnapshot(ev)!==reviewSnapshot(cached))throw new Error('资料或图片已变化，请刷新后重新审核');
         if(!await askConfirm('确认海报并排入发送','确认后将按计划自动推送，请核对收件人、海报和计划时间。',[recipient(ev),'计划时间：'+(ev.trigger_at||'未排期')],'确认发送排期'))return;
         await unchangedEvent(ev,canConfirm);await ensureSelected(ev);const r=requireOK(await post(base+'/confirm',{operator:'hr'}));report('event','海报已确认',[recipient(ev),'计划推送：'+(r.trigger_at||ev.trigger_at||'以服务端排期为准')]);
@@ -264,8 +257,8 @@ async function eventAction(action,id,cardId){
     }finally{await loadEvents();if($('#event-detail-dialog').open){const current=EVENTS.find(e=>sameId(e.id,id));if(current)showEventDetail(current);}}
   });
 }
-$('#event-detail').addEventListener('click',e=>{const b=e.target.closest('button[data-action]');if(b&&!b.disabled)eventAction(b.dataset.action,b.dataset.id,b.dataset.card);});
-$('#events').addEventListener('click',e=>{const b=e.target.closest('button[data-action]');if(b&&!b.disabled)eventAction(b.dataset.action,b.dataset.id,b.dataset.card);});
+$('#event-detail').addEventListener('click',e=>{const b=e.target.closest('button[data-action]');if(b&&!b.disabled)eventAction(b.dataset.action,b.dataset.id);});
+$('#events').addEventListener('click',e=>{const b=e.target.closest('button[data-action]');if(b&&!b.disabled)eventAction(b.dataset.action,b.dataset.id);});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-zoom]');if(b){const url=fileURL(b.dataset.zoom);if(url){$('#zoom-img').src=url;$('#zoom-dialog').showModal();}}});
 $('#scope').onchange=()=>{if($('#scope').value==='pending'&&$('#event-status').value==='sent'){clearDeliveryFilter();$('#event-status').value='pending';}loadEvents();};
 $('#confirm-all').onclick=()=>batchEvents('confirm');
