@@ -54,14 +54,14 @@
     <div class="tpl-form">
       <label class="field">贺卡类型<select id="tpl-key"></select></label>
       <div id="tpl-background"></div><div id="tpl-vars" class="grid vars-grid"></div><div id="tpl-company"></div>
+      <div id="tpl-editor" class="tpl-copy-panel"></div>
+      <div class="bar save-bar"><button id="save-tpl" class="primary">保存模板</button><button id="reset-tpl">撤销修改</button><span class="meta">保存后用于新生成的海报。</span></div>
     </div>
     <aside class="tpl-preview-panel">
       <h3>海报预览</h3><p class="preview-help">姓名、日期等字段由系统在生成贺卡时自动填入。</p>
       <div class="bar"><button id="preview-tpl">更新预览</button><label class="meta"><input id="auto-preview" type="checkbox" checked> 自动预览</label></div>
       <p id="preview-state" class="preview-state" role="status">正在准备预览…</p><div id="tpl-preview" class="preview-stage"><div class="empty">预览当前文案与字体效果<br>点击海报可放大查看</div></div>
     </aside>
-    <div id="tpl-editor" class="tpl-form tpl-copy-panel"></div>
-    <div class="bar save-bar"><button id="save-tpl" class="primary">保存模板</button><button id="reset-tpl">撤销修改</button><span class="meta">保存后用于新生成的海报。</span></div>
   </div></fieldset>
 </section>
 <section id="tab-sys" hidden>
