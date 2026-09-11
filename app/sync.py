@@ -2,15 +2,15 @@
 
 An incomplete list or reduced authorization scope is not evidence of departure.
 Only an explicit boolean is_resigned=True disables an existing open_id. Existing
-local names, department names, dates and inactive state are preserved. Sync never
-marks identities verified; an observed mismatch revokes pending deliveries.
+local department names, dates and inactive state are preserved. Unique exact
+names are associated automatically; department differences do not block binding.
 """
 import logging
 from collections.abc import Mapping
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import db, employees, feishu
+from . import bindings, db, employees, feishu
 from .settings import TZ
 
 log = logging.getLogger("sync")
@@ -73,15 +73,23 @@ def _sync_user(user, attr_ids):
     if not isinstance(status, Mapping) or ("is_resigned" in status and not isinstance(status["is_resigned"], bool)):
         raise employees.EmployeeError("飞书离职状态不是明确布尔值", "invalid_user_status")
     resigned = status.get("is_resigned") is True
-    departments, department_error = [], None
+    departments = []
     if not resigned:
         try:
             departments = employees.resolve_departments(user)
-        except employees.IdentityError as exc:
-            department_error = exc
+        except employees.IdentityError:
+            pass  # Department access is optional for name/ID association.
     with db.tx() as conn:
         conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute("SELECT * FROM employees WHERE feishu_open_id=?", (open_id,)).fetchone()
+        if not existing and not resigned and user.get("name"):
+            names = conn.execute("SELECT * FROM employees WHERE name=?", (user["name"],)).fetchall()
+            if len(names) > 1:
+                raise employees.EmployeeError("本地存在同名员工，无法唯一对应飞书 ID", "ambiguous_employee")
+            if names:
+                if names[0]["feishu_open_id"]:
+                    raise employees.EmployeeError("姓名已有另一个飞书 ID，请先处理对应冲突", "identifier_conflict")
+                existing = names[0]
         current = dict(existing) if existing else None
         if current:
             employees._assert_editable(conn, current["id"])
@@ -96,14 +104,11 @@ def _sync_user(user, attr_ids):
             return "skipped", None  # Restoring inactive employees requires an explicit local edit.
 
         remote_name = user.get("name")
-        error = department_error
+        error = None
         if not isinstance(remote_name, str) or not remote_name.strip():
             error = employees.IdentityError("飞书缺少姓名", "missing_name")
         elif current and current.get("name") and current["name"] != remote_name:
             error = employees.IdentityError("飞书姓名与本地姓名冲突，已保留本地资料", "name_mismatch")
-        elif current and current.get("department") and departments:
-            if not set(employees.department_names(current["department"])).intersection(d["name"] for d in departments):
-                error = employees.IdentityError("飞书部门与本地完整部门名冲突，已保留本地资料", "department_mismatch")
         if error:
             if current:
                 employees._reset_identity(conn, current["id"], str(error), "failed")
@@ -137,9 +142,12 @@ def sync_from_feishu(fill_birthday=True):
     result = {"ok": True, "total_from_feishu": len(users), "added": 0, "updated": 0,
               "disabled": 0, "skipped": 0, "errors": []}
     by_id = {}
+    by_name = {}
     for user in users:
         if isinstance(user, Mapping) and isinstance(user.get("open_id"), str):
             by_id.setdefault(user["open_id"], []).append(user)
+            if isinstance(user.get("name"), str) and user["name"]:
+                by_name.setdefault(user["name"], set()).add(user["open_id"])
     processed = set()
     for position, user in enumerate(users, 1):
         open_id = user.get("open_id") if isinstance(user, Mapping) else None
@@ -151,6 +159,8 @@ def sync_from_feishu(fill_birthday=True):
                 processed.add(open_id)
                 if any(other != user for other in by_id.get(open_id, [])):
                     raise employees.EmployeeError("同一 open_id 返回冲突的通讯录记录，拒绝同步", "conflicting_directory_rows")
+                if isinstance(user.get("name"), str) and len(by_name.get(user["name"], ())) > 1:
+                    raise employees.EmployeeError("飞书中存在多个同名人员，无法唯一对应", "ambiguous_employee")
             action, error = _sync_user(user, attr_ids)
             if error:
                 raise error
@@ -159,6 +169,7 @@ def sync_from_feishu(fill_birthday=True):
             result["errors"].append({"row": position, "open_id": open_id, "code": exc.code,
                                      "error": str(exc), "msg": str(exc)})
     result["ok"] = not result["errors"]
+    result["binding"] = bindings.auto_bind(users=users)
     log.info("同步完成：新增=%s 补全=%s 明确离职=%s 错误=%s",
              result["added"], result["updated"], result["disabled"], len(result["errors"]))
     return result

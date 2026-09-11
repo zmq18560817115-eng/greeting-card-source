@@ -1,0 +1,20 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>连续多选交互测试</title>
+<link rel="stylesheet" href="/static/workspace.css"><script src="/static/row-selection.js"></script>
+<style>body{padding:24px}.test-toolbar{display:flex;gap:16px;align-items:center;margin:10px 0}.test-rows{max-height:300px;overflow:auto}.data-table td{height:44px}h2{font-size:18px}.second{margin-top:32px}</style></head><body>
+<h2>交互测试：通用行，不连接员工库</h2><p>仅用于检查选择手势，无保存或发送接口。</p>
+<div class="test-toolbar"><button id="clear">清空选择</button><button id="filter">仅显示奇数行</button><button id="reverse">倒序排列</button><label><input type="checkbox" id="locked">锁定操作</label><span id="count" role="status"></span></div>
+<div id="sample"></div><h2 class="second">页面滚动测试</h2><span id="page-count" role="status"></span><div id="page-sample"></div>
+<script>
+function setup(id,prefix,total,scrollable){
+ const container=document.getElementById(id);let order=Array.from({length:total},(_,index)=>String(index+1)),selected=new Set();
+ function change(next){selected=next;document.getElementById(prefix==='row'?'count':'page-count').textContent='已选 '+selected.size+' 行：'+[...selected].join(',');}
+ function render(){selected=new Set([...selected].filter(key=>order.includes(key)));change(selected);
+  container.innerHTML='<div class="table-wrap '+(scrollable?'test-rows':'')+'"><table class="data-table"><thead><tr><th><input type="checkbox" id="'+prefix+'-all" aria-label="全选'+prefix+'"></th><th>测试行</th><th>操作</th></tr></thead><tbody>'+order.map(key=>'<tr><td class="selection-cell"><input type="checkbox" data-row="'+key+'" aria-label="'+prefix+' '+key+'"></td><td>第 '+key+' 行</td><td><button type="button" data-action>独立按钮 '+key+'</button></td></tr>').join('')+'</tbody></table></div>';RowSelection.refresh(container);
+ }
+ RowSelection.attach({container,selector:'[data-row]',allId:prefix+'-all',idOf:input=>input.dataset.row,
+  ids:()=>order,selected:()=>selected,change,locked:()=>document.getElementById('locked').checked});
+ render();return {render,clear(){selected=new Set();render();},filter(){order=order.filter(key=>Number(key)%2);render();},reverse(){order.reverse();render();}};
+}
+const sample=setup('sample','row',30,true);setup('page-sample','page',40,false);
+document.getElementById('clear').onclick=()=>sample.clear();document.getElementById('filter').onclick=()=>sample.filter();document.getElementById('reverse').onclick=()=>sample.reverse();
+</script></body></html>

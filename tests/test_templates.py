@@ -196,6 +196,18 @@ class TemplateTests(unittest.TestCase):
         info = templates.store_background(stream.getvalue(), directory=self.root)
         self.assertEqual((info["width"], info["height"]), (60, 30))
 
+    def test_replacement_background_fits_canvas_without_stretching(self):
+        stream = BytesIO()
+        with Image.new("RGB", (100, 100), "red") as image:
+            image.save(stream, "PNG")
+        for fit, corner in (("cover", (255, 0, 0, 255)), ("contain", (255, 255, 255, 255))):
+            with self.subTest(fit=fit):
+                info = templates.save_base_image(stream.getvalue(), directory=self.root, size=(100, 200), fit=fit)
+                with Image.open(info["base_image"]) as image:
+                    self.assertEqual(image.size, (100, 200))
+                    self.assertEqual(image.getpixel((0, 0)), corner)
+                    self.assertEqual(image.getpixel((50, 100)), (255, 0, 0, 255))
+
     def test_upload_pixel_limit_and_failed_replace_leave_no_files(self):
         stream = BytesIO()
         Image.new("RGB", (20, 20)).save(stream, "PNG")

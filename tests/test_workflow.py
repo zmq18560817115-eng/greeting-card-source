@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
+from PIL import Image
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -286,15 +287,75 @@ class WorkflowTests(unittest.TestCase):
         response = self.client.post("/api/employees/import", files={"file": ("staff.csv", "姓名,name\n甲,乙".encode())})
         self.assertEqual(response.status_code, 400)
 
-    def test_preview_uses_real_employee_and_does_not_save(self):
-        with patch.object(main.compose, "load_config", return_value=self.cfg), patch.object(templates, "save_config") as save:
+    def test_preview_keeps_automatic_fields_without_reading_employees_or_saving(self):
+        with patch.object(main.compose, "load_config", return_value=self.cfg), patch.object(templates, "save_config") as save, \
+                patch.object(main, "query_one", side_effect=AssertionError("preview must not read employees")), \
+                patch.object(main.compose, "render", wraps=main.compose.render) as render:
             response = self.client.post("/api/templates/preview", json={
-                "employee_id": self.emp["id"], "event_date": "2026-09-10", "years": 3,
+                "employee_id": self.emp["id"], "event_date": "invalid", "years": 999,
                 "templates": {"birthday": {"layers": [{"text": "{name} {department} {birth_date} {date}"}]}}})
             self.assertEqual(response.status_code, 200, response.text)
             for url in response.json()["images"].values():
                 self.assertTrue((self.root / url.split("/")[-1]).is_file())
+            for call in render.call_args_list:
+                for field in ("name", "department", "birth_date", "date", "years", "event_date"):
+                    self.assertEqual(call.args[1][field], "{" + field + "}")
+            self.assertEqual(response.json()["sizes"]["birthday"], {"width": 400, "height": 500})
             save.assert_not_called()
+
+    def test_background_upload_preview_then_save_only_replaces_selected_template(self):
+        original = self.root / "original.png"
+        with Image.new("RGB", (400, 500), "red") as image:
+            image.save(original)
+        self.cfg["templates"]["birthday"]["base_image"] = str(original)
+        self.cfg["canvas"] = {"width": 600, "height": 700}
+        config_path = self.root / "templates.json"
+        templates.save_config(self.cfg, config_path)
+        before = config_path.read_bytes()
+        stream = io.BytesIO()
+        with Image.new("RGB", (100, 100), "green") as image:
+            image.save(stream, "PNG")
+        with patch.object(templates, "TEMPLATE_CONFIG", config_path), \
+                patch.object(templates, "TEMPLATE_DIR", self.root / "uploads"), \
+                patch.object(main.compose, "load_config", side_effect=lambda: templates.load_config()):
+            response = self.client.post("/api/templates/birthday/background?fit=cover",
+                                        files={"file": ("updated.png", stream.getvalue(), "image/png")})
+            self.assertEqual(response.status_code, 200, response.text)
+            info = response.json()
+            self.assertEqual((info["width"], info["height"]), (400, 500))
+            self.assertEqual(config_path.read_bytes(), before)
+            edits = {"templates": {"birthday": {"base_image": info["base_image"]}}}
+            preview = self.client.post("/api/templates/preview", json=edits)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            with Image.open(self.root / preview.json()["images"]["birthday"].split("/")[-1]) as image:
+                self.assertEqual(image.getpixel((0, 0)), (0, 128, 0))
+            self.assertEqual(config_path.read_bytes(), before)
+            saved = self.client.post("/api/templates", json=edits)
+            self.assertEqual(saved.status_code, 200, saved.text)
+            cfg = templates.load_config()
+            self.assertEqual(cfg["templates"]["birthday"]["base_image"], info["base_image"])
+            self.assertEqual(cfg["templates"]["anniversary"], templates.validate_config(self.cfg)["templates"]["anniversary"])
+            self.assertEqual(cfg["templates"]["birthday"]["layers"], templates.validate_config(self.cfg)["templates"]["birthday"]["layers"])
+            with Image.open(original) as image:
+                self.assertEqual(image.getpixel((0, 0)), (255, 0, 0))
+
+    def test_background_upload_rejects_invalid_files_keys_modes_and_unauthorized_requests(self):
+        stream = io.BytesIO()
+        with Image.new("RGB", (100, 100)) as image:
+            image.save(stream, "PNG")
+        target = self.root / "uploads"
+        with patch.object(main.compose, "load_config", return_value=self.cfg), \
+                patch.object(templates, "TEMPLATE_DIR", target), patch.object(templates, "save_config") as save:
+            for url, raw in (("birthday/background", b"not an image"),
+                             ("missing/background", stream.getvalue()),
+                             ("birthday/background?fit=stretch", stream.getvalue())):
+                response = self.client.post("/api/templates/" + url, files={"file": ("photo.png", raw, "image/png")})
+                self.assertEqual(response.status_code, 400, response.text)
+            with patch.object(main, "ADMIN_TOKEN", "test-only-token"):
+                response = self.client.post("/api/templates/birthday/background", files={"file": ("photo.png", stream.getvalue())})
+                self.assertEqual(response.status_code, 401)
+            save.assert_not_called()
+        self.assertFalse(target.exists())
 
     def test_legacy_database_migration_is_repeatable(self):
         db.init_db()

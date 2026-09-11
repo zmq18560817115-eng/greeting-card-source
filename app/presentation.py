@@ -22,7 +22,7 @@ def friendly_error(value):
     if any(word in lower for word in ("too many requests", "rate limit", "frequency limit")):
         return "操作过于频繁，请稍后再试。"
     if "缺少飞书 open_id" in raw:
-        return "缺少飞书 ID，请同步通讯录或选择候选人完成绑定。"
+        return "尚未对应飞书 ID，请连接飞书并同步名单，系统将按唯一姓名自动对应。"
     if "姓名与飞书通讯录不一致" in raw:
         return "姓名与飞书记录不一致，请核对员工姓名和绑定的飞书 ID。"
     if "部门与飞书完整部门名" in raw:
@@ -88,5 +88,5 @@ def event_notice(event, emp):
     if status == "failed":
         return "本次推送失败，请先查看推送记录中的原因，处理后再重试。"
     if status == "blocked":
-        return "员工身份尚未通过飞书核验，请先核对姓名、部门和飞书 ID。"
+        return "员工尚未完成飞书对应，请同步名单并处理姓名或 ID 冲突。"
     return ""

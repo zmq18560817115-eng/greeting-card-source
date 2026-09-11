@@ -73,9 +73,9 @@ class EmployeeTests(unittest.TestCase):
         before = self.get(eid)
         result = employees.validate_identity(before)
         self.assertTrue(result["ok"])
-        self.assertEqual(result["evidence"]["matched_departments"], ["研发部"])
+        self.assertEqual(result["evidence"]["rule"], "unique_exact_name_and_open_id")
         self.get_user.assert_called_once_with("ou_one")
-        self.get_department.assert_called_once_with("d1")
+        self.get_department.assert_not_called()
         self.assertEqual(before, self.get(eid))
 
     def test_name_and_open_id_are_exact(self):
@@ -90,25 +90,23 @@ class EmployeeTests(unittest.TestCase):
                     employees.validate_identity(self.get(eid))
                 self.assertEqual(raised.exception.code, code)
 
-    def test_no_substring_department_matching(self):
+    def test_department_difference_does_not_block_name_id_mapping(self):
         eid = self.employee(department="研发")
-        with self.assertRaises(employees.IdentityError) as raised:
-            employees.validate_identity(self.get(eid))
-        self.assertEqual(raised.exception.code, "department_mismatch")
+        self.assertTrue(employees.validate_identity(self.get(eid))["ok"])
+        self.get_department.assert_not_called()
 
     def test_multiple_exact_department_names_accept_one_complete_match(self):
         eid = self.employee(department=" 产品部，市场部、研发部 ")
         self.assertTrue(employees.validate_identity(self.get(eid))["ok"])
 
-    def test_department_id_and_complete_resolution_required(self):
+    def test_department_permission_is_not_required_for_recipient_mapping(self):
         eid = self.employee()
         self.get_user.side_effect = None
         self.get_user.return_value = self.remote(department_ids=["d1", "d2"])
         self.get_department.side_effect = lambda did: ({"open_department_id": did, "name": "研发部"}
                                                      if did == "d1" else {"department_id": "d2", "name": "市场部"})
-        with self.assertRaises(employees.IdentityError) as raised:
-            employees.validate_identity(self.get(eid))
-        self.assertEqual(raised.exception.code, "invalid_department")
+        self.assertTrue(employees.validate_identity(self.get(eid))["ok"])
+        self.get_department.assert_not_called()
 
     def test_remote_error_or_resignation_fails_closed_and_is_read_only(self):
         eid = self.employee()
@@ -152,7 +150,7 @@ class EmployeeTests(unittest.TestCase):
         self.assert_invalidated(event_id, card_id)
 
     def test_missing_identity_or_inactive_employee_never_calls_remote(self):
-        for changes in ({"active": 0}, {"name": ""}, {"department": ""}, {"feishu_open_id": ""}):
+        for changes in ({"active": 0}, {"name": ""}, {"feishu_open_id": ""}):
             with self.subTest(changes=changes):
                 emp = {"active": 1, "name": "张三", "department": "研发部", "feishu_open_id": "ou_one", **changes}
                 with self.assertRaises(employees.IdentityError):
@@ -202,7 +200,8 @@ class EmployeeTests(unittest.TestCase):
 
     def test_candidate_owned_by_other_employee_is_rejected(self):
         self.employee()
-        other = self.employee(feishu_open_id="ou_two")
+        other = self.employee(name="李四", feishu_open_id="ou_two")
+        self.get_user.side_effect = lambda oid: self.remote(open_id=oid, name="李四")
         result = employees.verify_employee(other, "ou_one")
         self.assertFalse(result["ok"])
         self.assertEqual(result["code"], "identifier_conflict")
@@ -238,9 +237,9 @@ class EmployeeTests(unittest.TestCase):
         before = self.get(eid)
         result = employees.match_employee(eid)
         self.assertTrue(result["ok"])
-        self.assertTrue(result["requires_selection"])
+        self.assertFalse(result["requires_selection"])
         self.assertTrue(result["candidates"][0]["eligible"])
-        self.assertEqual(result["candidates"][0]["department"], "研发部")
+        self.get_department.assert_not_called()
         self.assertEqual(before, self.get(eid))
 
     def test_match_reports_ambiguous_and_ineligible_candidates(self):
@@ -249,8 +248,8 @@ class EmployeeTests(unittest.TestCase):
         self.get_user.side_effect = lambda oid: self.remote(open_id=oid, department_ids=["d3"] if oid == "ou_c" else ["d1"])
         result = employees.match_employee(eid)
         self.assertTrue(result["ambiguous"])
-        self.assertEqual(sum(c["eligible"] for c in result["candidates"]), 2)
-        self.assertEqual(result["candidates"][2]["code"], "department_mismatch")
+        self.assertEqual(sum(c["eligible"] for c in result["candidates"]), 0)
+        self.assertEqual(result["candidates"][2]["code"], "ambiguous_employee")
 
     def test_identity_edits_reset_verified_and_revoke_cards(self):
         for field, value in (("name", "李四"), ("department", "产品部"), ("feishu_open_id", "ou_changed"), ("feishu_user_id", "new-user")):
@@ -259,8 +258,9 @@ class EmployeeTests(unittest.TestCase):
                 db.execute("UPDATE employees SET identity_status='verified', identity_verified_at='yesterday' WHERE id=?", (eid,))
                 event_id, card_id = self.event(eid)
                 employees.save_employee({"id": eid, field: value})
-                self.assertEqual(self.get(eid)["identity_status"], "pending")
-                self.assertIsNone(self.get(eid)["identity_verified_at"])
+                self.assertEqual(self.get(eid)["identity_status"], "verified" if field == "department" else "pending")
+                if field != "department":
+                    self.assertIsNone(self.get(eid)["identity_verified_at"])
                 self.assert_invalidated(event_id, card_id)
 
     def test_other_profile_changes_revoke_cards(self):
@@ -329,8 +329,11 @@ class EmployeeTests(unittest.TestCase):
         result = employees.import_rows([{"open_id": "ou_one", "姓名": "李四"},
                                         {"employee_no": "E1", "department": "研发"},
                                         {"employee_no": "E1", "open_id": "ou_wrong"}])
-        self.assertEqual(len(result["errors"]), 3)
-        self.assertEqual(before, self.get(eid))
+        self.assertEqual(len(result["errors"]), 2)
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(self.get(eid)["department"], "研发")
+        for key in ("name", "employee_no", "feishu_open_id"):
+            self.assertEqual(before[key], self.get(eid)[key])
 
     def test_explicit_id_can_edit_but_identifier_collision_rolls_back(self):
         eid = self.employee(employee_no="E1")
@@ -487,13 +490,14 @@ class EmployeeTests(unittest.TestCase):
         self.assertEqual(sync.sync_from_feishu(False)["skipped"], 1)
         self.assertEqual(before, self.get(eid))
 
-    def test_sync_uses_department_names_and_never_claims_verified(self):
+    def test_sync_preserves_department_names_and_automatically_maps_recipient(self):
         self.list_users.return_value = [self.remote(department_ids=["d1", "d2"])]
         result = sync.sync_from_feishu(False)
         self.assertEqual(result["added"], 1)
         emp = db.query_one("SELECT * FROM employees")
         self.assertEqual(set(employees.department_names(emp["department"])), {"研发部", "市场部"})
-        self.assertEqual(emp["identity_status"], "pending")
+        self.assertEqual(emp["identity_status"], "verified")
+        self.assertEqual(result["binding"]["matched"], 1)
         self.assertEqual(emp["source"], "feishu")
 
     def test_sync_name_department_conflict_preserves_local_and_revokes_approval(self):
@@ -517,21 +521,22 @@ class EmployeeTests(unittest.TestCase):
                          ("2020-01-01", "local-E1", "keep@test", "local"))
         self.assertEqual(emp["feishu_user_id"], "u1")
 
-    def test_sync_department_failure_does_not_store_ids_or_disable(self):
+    def test_sync_department_failure_does_not_block_name_id_mapping(self):
         eid = self.employee()
         self.get_department.side_effect = RuntimeError("department forbidden")
         self.list_users.return_value = [self.remote(), self.remote(name="李四", open_id="ou_two")]
         result = sync.sync_from_feishu(False)
-        self.assertEqual((result["added"], result["disabled"], len(result["errors"])), (0, 0, 2))
+        self.assertEqual((result["added"], result["disabled"], len(result["errors"])), (1, 0, 0))
         self.assertEqual(self.get(eid)["department"], "研发部")
         self.assertEqual(self.get(eid)["active"], 1)
 
-    def test_sync_does_not_blind_bind_unidentified_same_name_department(self):
+    def test_sync_auto_binds_unique_name_to_existing_unbound_employee(self):
         eid = self.employee(feishu_open_id=None)
         self.list_users.return_value = [self.remote()]
         result = sync.sync_from_feishu(False)
-        self.assertEqual(result["errors"][0]["code"], "ambiguous_employee")
-        self.assertIsNone(self.get(eid)["feishu_open_id"])
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(self.get(eid)["feishu_open_id"], "ou_one")
+        self.assertEqual(self.get(eid)["identity_status"], "verified")
         self.assertEqual(len(db.query("SELECT id FROM employees")), 1)
 
     def test_sync_respects_pushing_lock_and_preserves_unknown_deliveries(self):

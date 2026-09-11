@@ -1,4 +1,4 @@
-"""确认后投递，发送前实时三项核验，并对并发发送和不确定回执做保护。"""
+"""确认后投递，发送前实时检查姓名与飞书 ID，并对并发发送和不确定回执做保护。"""
 import json
 import logging
 import os
@@ -43,7 +43,7 @@ def confirm_event(event_id, operator="hr"):
         emp, card = _review_data(conn, event)
     result = employees.validate_identity(emp)
     if not result["ok"]:
-        raise ValueError(result.get("error") or "姓名、部门、飞书ID核验未通过")
+        raise ValueError(result.get("error") or "姓名与飞书ID对应未通过")
     with tx() as conn:
         conn.execute("BEGIN IMMEDIATE")
         current = dict(conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone())
@@ -96,14 +96,14 @@ def push_event(event_id, operator="auto", force=False, with_text=True):
         result = employees.validate_identity(emp)
         if not result["ok"]:
             status = "blocked"
-            raise ValueError(result.get("error") or "姓名、部门、飞书ID核验失败")
+            raise ValueError(result.get("error") or "姓名与飞书ID对应失败")
         evidence = result.get("evidence") or result
         if DRY_RUN:
             status = "simulated"
             image_key = message_id = "DRY_RUN"
         else:
             image_key = feishu.upload_image(card["file_path"])
-            # 上传可能耗时，发送前再次核验在职状态及三项身份。
+            # 上传可能耗时，发送前再次核验在职状态及姓名与飞书 ID。
             result = employees.validate_identity(emp)
             if not result["ok"]:
                 status = "blocked"

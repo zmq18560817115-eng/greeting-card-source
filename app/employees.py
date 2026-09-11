@@ -1,10 +1,7 @@
 """Employee identity and safe imports.
 
-Only an explicit local id, open_id or employee number can select an import
-target. Names never select a row for update. Verification is live and exact:
-the open_id and name must match, and at least one complete local department
-name (separated by 、, ， or comma) must equal a resolved Feishu department name.
-Every remote department must resolve successfully; no substring matching.
+Imports use stable identifiers for updates. Feishu recipients are matched by
+exact name and open_id; department is editable business data, not a binding rule.
 """
 import json
 import re
@@ -30,14 +27,14 @@ class IdentityError(EmployeeError):
 
 FIELDS = ("name", "employee_no", "email", "department", "feishu_user_id",
           "feishu_open_id", "join_date", "birth_date", "gender", "active", "note")
-IDENTITY_FIELDS = ("name", "department", "feishu_open_id", "feishu_user_id")
+IDENTITY_FIELDS = ("name", "feishu_open_id", "feishu_user_id")
 HEADER_MAP = {
     **{key: key for key in ("id", *FIELDS)},
     "员工id": "id", "姓名": "name", "工号": "employee_no", "邮箱": "email",
     "部门": "department", "入职日期": "join_date", "入职时间": "join_date",
-    "生日": "birth_date", "出生日期": "birth_date", "性别": "gender",
+    "生日": "birth_date", "出生日期": "birth_date", "出生年月": "birth_date", "性别": "gender",
     "飞书open_id": "feishu_open_id", "open_id": "feishu_open_id",
-    "飞书user_id": "feishu_user_id", "备注": "note", "在职": "active",
+    "飞书user_id": "feishu_user_id", "备注": "note", "在职": "active", "在职状态": "active",
 }
 
 
@@ -104,9 +101,9 @@ def _normalize(payload):
         elif field in ("join_date", "birth_date"):
             out[field] = _date(value, field)
         elif field == "active":
-            values = {"1": 1, "true": 1, "在职": 1, "0": 0, "false": 0, "离职": 0}
+            values = {"1": 1, "true": 1, "在职": 1, "0": 0, "false": 0, "离职": 0, "已离职": 0, "停用": 0, "已停用": 0}
             if str(value).strip().lower() not in values:
-                raise EmployeeError("active 仅接受 0/1、true/false 或在职/离职", "invalid_active")
+                raise EmployeeError("在职状态请填写在职或离职，也支持 0/1、true/false", "invalid_active")
             out[field] = values[str(value).strip().lower()]
         else:
             if not isinstance(value, (str, int)) or isinstance(value, bool):
@@ -193,7 +190,7 @@ def _save(conn, data, employee_id=None, source="local"):
             conn.execute(f"UPDATE employees SET {','.join(k+'=?' for k in changed)},updated_at=? WHERE id=?",
                          [*changed.values(), db.now(), employee_id])
             if set(changed).intersection((*IDENTITY_FIELDS, "active")):
-                _reset_identity(conn, employee_id, "员工身份或在职状态已修改，请重新核验")
+                _reset_identity(conn, employee_id, "员工姓名或在职状态已修改，等待更新飞书对应关系")
             _invalidate_events(conn, employee_id, "员工资料已修改，请重新生成并确认贺卡",
                                deactivate=data.get("active", current["active"]) == 0)
     return {"ok": True, "id": employee_id, "created": current is None,
@@ -217,6 +214,67 @@ def save_employee(payload):
             return _save(conn, data, data.get("id"))
     except sqlite3.IntegrityError as exc:
         raise EmployeeError("员工标识冲突，资料未保存", "identifier_conflict", 409) from exc
+
+
+EDIT_FIELDS = ("name", "department", "employee_no", "join_date", "birth_date", "active")
+
+
+def batch_update(updates):
+    """Apply explicit field changes atomically, rejecting stale editor snapshots."""
+    if not isinstance(updates, list) or not 1 <= len(updates) <= 1000:
+        raise EmployeeError("每次请更正 1 到 1000 位员工", "invalid_batch")
+    ids, prepared = set(), []
+    for item in updates:
+        if not isinstance(item, Mapping):
+            raise EmployeeError("批量更正资料格式无效", "invalid_batch")
+        eid = _id(item.get("id"))
+        if eid in ids:
+            raise EmployeeError("批量更正包含重复员工，请重新选择", "duplicate_employee")
+        ids.add(eid)
+        changes, original = item.get("changes"), item.get("original")
+        if not isinstance(changes, Mapping) or not changes or set(changes) - set(EDIT_FIELDS):
+            raise EmployeeError("请选择要更正的基础资料字段", "invalid_fields")
+        if not isinstance(original, Mapping) or set(original) != set(EDIT_FIELDS):
+            raise EmployeeError("缺少原始资料，请关闭更正窗口并刷新后重试", "missing_snapshot")
+        label = str(original.get("name") or "员工")
+        try:
+            for key in ("name", "department", "active"):
+                if key in changes and _blank(changes[key]):
+                    raise EmployeeError({"name": "姓名", "department": "部门", "active": "在职状态"}[key] + "不能为空")
+            data = _normalize(changes)
+            # Clearing optional fields is explicit here, unlike blank import cells.
+            for key in ("employee_no", "join_date", "birth_date"):
+                if key in changes and _blank(changes[key]):
+                    data[key] = None
+        except EmployeeError as exc:
+            raise EmployeeError(f"{label}：{exc}；本次更正未保存", exc.code, exc.status_code) from exc
+        prepared.append((eid, original, data))
+    changed_ids, changed_names = [], []
+    with db.tx() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for eid, original, data in prepared:
+            label = str(original.get("name") or "员工")
+            try:
+                current = _get(conn, eid)
+                if any(current.get(key) != original[key] for key in EDIT_FIELDS):
+                    raise EmployeeError("资料已被修改，请关闭更正窗口并刷新后重试", "employee_changed", 409)
+                changed = {key: value for key, value in data.items() if current.get(key) != value}
+                if not changed:
+                    continue
+                _save(conn, changed, eid)
+                changed_ids.append(eid)
+                if "name" in changed:
+                    changed_names.append((eid, changed["name"]))
+            except (EmployeeError, sqlite3.IntegrityError) as exc:
+                reason = str(exc) if isinstance(exc, EmployeeError) else "工号或人员标识重复"
+                for key, text in (("employee_no", "工号"), ("feishu_open_id", "飞书 ID")):
+                    reason = reason.replace(key, text)
+                raise EmployeeError(f"{label}：{reason}；本次更正均未保存",
+                                    getattr(exc, "code", "identifier_conflict"), getattr(exc, "status_code", 409)) from exc
+        for eid, name in changed_names:
+            if conn.execute("SELECT 1 FROM employees WHERE name=? AND id<>?", (name, eid)).fetchone():
+                raise EmployeeError(f"{name}：已有同名员工，无法唯一对应飞书 ID；本次更正均未保存", "ambiguous_employee", 409)
+    return {"ok": True, "updated": len(changed_ids), "unchanged": len(prepared) - len(changed_ids), "ids": changed_ids}
 
 
 def _import_target(conn, data):
@@ -339,7 +397,7 @@ def resolve_departments(user):
     return departments
 
 
-def _validate_identity(emp):
+def _validate_identity(emp, remote_user=None):
     """Read-only live verification; return evidence or raise IdentityError.
 
     Does not consult or mutate cached verification state. Callers must compare
@@ -347,7 +405,7 @@ def _validate_identity(emp):
     """
     emp = dict(emp)
     evidence = {"checked_at": db.now(), "local": {k: emp.get(k) for k in ("id", "name", "department", "feishu_open_id")},
-                "rule": "exact_open_id_and_name_and_at_least_one_complete_department"}
+                "rule": "unique_exact_name_and_open_id"}
 
     def fail(message, code):
         raise IdentityError(message, code, evidence)
@@ -359,10 +417,11 @@ def _validate_identity(emp):
         fail("缺少飞书 open_id", "missing_open_id")
     if not isinstance(emp.get("name"), str) or not emp["name"].strip():
         fail("缺少员工姓名", "missing_name")
-    if not isinstance(emp.get("department"), str) or not department_names(emp["department"]):
-        fail("缺少完整部门名称", "missing_departments")
+    duplicates = db.query("SELECT id FROM employees WHERE name=? AND id<>?", (emp["name"], emp.get("id", -1)))
+    if duplicates:
+        fail("存在同名员工，姓名无法唯一对应飞书 ID，请先处理重复姓名", "ambiguous_employee")
     try:
-        user = feishu.get_user(open_id)
+        user = remote_user if remote_user is not None else feishu.get_user(open_id)
     except feishu.FeishuError as exc:
         raise IdentityError(feishu.connection_error(exc), "user_unavailable", evidence) from exc
     except Exception as exc:
@@ -382,15 +441,6 @@ def _validate_identity(emp):
             fail("飞书在职状态无效", "invalid_user_status")
         if status.get(key) is True:
             fail("飞书用户已离职、冻结或退出", "inactive_feishu_user")
-    try:
-        departments = resolve_departments(user)
-    except IdentityError as exc:
-        raise IdentityError(str(exc), exc.code, evidence) from exc
-    evidence["remote"]["departments"] = departments
-    matched = sorted(set(department_names(emp["department"])).intersection(d["name"] for d in departments))
-    evidence["matched_departments"] = matched
-    if not matched:
-        fail("部门与飞书完整部门名均不一致", "department_mismatch")
     return evidence
 
 
@@ -399,7 +449,7 @@ def validate_identity(emp):
     return {"ok": True, "evidence": _validate_identity(emp)}
 
 
-def verify_employee(employee_id, open_id=None):
+def verify_employee(employee_id, open_id=None, *, remote_user=None):
     """Explicitly verify/bind an id; failed checks revoke old approval and cards.
 
     Network calls happen outside the write lock. The saved employee is compared
@@ -418,7 +468,7 @@ def verify_employee(employee_id, open_id=None):
         candidate["feishu_open_id"] = open_id.strip()
     failure = None
     try:
-        evidence = _validate_identity(candidate)
+        evidence = _validate_identity(candidate, remote_user=remote_user)
     except IdentityError as exc:
         failure, evidence = exc, exc.evidence
     with db.tx() as conn:
@@ -430,12 +480,14 @@ def verify_employee(employee_id, open_id=None):
         if failure is None:
             try:
                 _check_identifiers(conn, {"feishu_open_id": candidate.get("feishu_open_id")}, employee_id)
+                if conn.execute("SELECT 1 FROM employees WHERE name=? AND id<>? LIMIT 1", (current["name"], employee_id)).fetchone():
+                    raise EmployeeError("存在同名员工，无法唯一对应飞书 ID", "ambiguous_employee")
             except EmployeeError as exc:
                 failure = IdentityError(str(exc), exc.code, evidence)
         if failure is not None:
             status = "unavailable" if failure.code in ("user_unavailable", "department_unavailable") else "failed"
             _reset_identity(conn, employee_id, str(failure), status, evidence)
-            _invalidate_events(conn, employee_id, "身份核验失败：" + str(failure), deactivate=not current["active"])
+            _invalidate_events(conn, employee_id, "飞书对应异常：" + str(failure), deactivate=not current["active"])
             return {"ok": False, "id": employee_id, "open_id": original.get("feishu_open_id"),
                     "code": failure.code, "error": str(failure), "evidence": evidence}
         if candidate["feishu_open_id"] != original.get("feishu_open_id"):
@@ -471,7 +523,7 @@ def match_employee(employee_id):
         try:
             evidence = _validate_identity({**emp, "feishu_open_id": open_id})
             owner = db.query_one("SELECT id FROM employees WHERE feishu_open_id=? AND id<>?", (open_id, employee_id))
-            item.update(department="、".join(d["name"] for d in evidence["remote"]["departments"]), evidence=evidence)
+            item.update(evidence=evidence)
             if owner:
                 item.update(code="identifier_conflict", error="该 open_id 已属于其他员工")
             else:
@@ -481,5 +533,9 @@ def match_employee(employee_id):
             item["department"] = "、".join(d["name"] for d in exc.evidence.get("remote", {}).get("departments", []))
         candidates.append(item)
     eligible_count = sum(c["eligible"] for c in candidates)
-    return {"ok": bool(eligible_count), "candidates": candidates, "ambiguous": eligible_count > 1,
-            "requires_selection": True, "msg": "请选择候选并调用核验接口，尚未自动绑定"}
+    ambiguous = len(candidates) > 1
+    if ambiguous:
+        for candidate in candidates:
+            candidate.update(eligible=False, code="ambiguous_employee", error="飞书中存在多个同名人员，无法唯一对应")
+    return {"ok": bool(eligible_count) and not ambiguous, "candidates": candidates, "ambiguous": ambiguous,
+            "requires_selection": False, "msg": "请同步飞书名单，系统按唯一姓名自动对应；同名人员不会自动绑定"}

@@ -8,10 +8,10 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import compose, employees, feishu, feishu_config, pipeline, presentation, push, scheduler, sync, templates
+from . import bindings, compose, employees, feishu, feishu_config, pipeline, presentation, push, scheduler, staff_template, sync, templates
 from .dates import completed_years_since, next_cycle, parse_date, this_cycle
 from .db import init_db, now, query, query_one, tx
 from .settings import ADMIN_TOKEN, BASE_DIR, DRY_RUN, OUTPUT_DIR
@@ -148,7 +148,9 @@ def list_employees(keyword: str = "", only_active: bool = True, _=Depends(auth))
 
 @app.post("/api/employees")
 def upsert_employee(payload: dict = Body(...), _=Depends(auth)):
-    return employees.save_employee(payload)
+    result = employees.save_employee(payload)
+    result["binding"] = bindings.auto_bind([result["id"]])
+    return result
 
 
 HEADER_MAP = {
@@ -160,6 +162,7 @@ HEADER_MAP = {
 for _field in ("name", "employee_no", "email", "department", "join_date", "birth_date",
                "feishu_open_id", "feishu_user_id", "note"):
     HEADER_MAP[_field] = _field
+HEADER_MAP.update(employees.HEADER_MAP)
 
 
 @app.post("/api/employees/import")
@@ -213,12 +216,20 @@ async def import_employees(file: UploadFile = File(...), _=Depends(auth)):
     result = employees.import_rows(rows)
     for error in result.get("errors", []):
         error["msg"] = error.get("msg") or error.get("error", "导入失败")
+    result["binding"] = bindings.auto_bind([r["id"] for r in result["results"] if "id" in r])
     return result
 
 
 @app.post("/api/employees/batch-disable")
 def batch_disable(payload: dict = Body(...), _=Depends(auth)):
     return employees.deactivate(payload.get("ids", []))
+
+
+@app.post("/api/employees/batch-update")
+def batch_update_employees(payload: dict = Body(...), _=Depends(auth)):
+    result = employees.batch_update(payload.get("updates"))
+    result["binding"] = bindings.auto_bind(result["ids"])
+    return result
 
 
 @app.delete("/api/employees/{employee_id}")
@@ -229,7 +240,14 @@ def delete_employee(employee_id: int, _=Depends(auth)):
 
 @app.get("/api/employees/template.csv")
 def csv_template(_=Depends(auth)):
-    return {"csv": "姓名,工号,部门,邮箱,飞书open_id,入职日期,生日\n"}
+    return {"csv": ",".join(staff_template.HEADERS) + "\n"}
+
+
+@app.get("/api/employees/template.xlsx")
+def excel_template(_=Depends(auth)):
+    return Response(staff_template.build(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="employees.xlsx"'})
 
 
 @app.post("/api/employees/verify")
@@ -242,7 +260,7 @@ def verify_batch(payload: dict = Body(...), _=Depends(auth)):
     for eid in dict.fromkeys(ids):
         try:
             result = employees.verify_employee(eid)
-            results.append({**result, "msg": result.get("error") or "姓名、部门、飞书ID核验通过"})
+            results.append({**result, "msg": result.get("error") or "姓名与飞书ID对应通过"})
         except ValueError as exc:
             results.append({"id": eid, "ok": False, "msg": str(exc)})
     return {"results": results}
@@ -258,7 +276,7 @@ def bind_feishu(payload: dict = Body(...), _=Depends(auth)):
     if not payload.get("open_id"):
         raise ValueError("open_id必填")
     result = employees.verify_employee(payload.get("employee_id"), open_id=payload["open_id"])
-    return {**result, "msg": result.get("error") or "三项核验通过，已绑定"}
+    return {**result, "msg": result.get("error") or "姓名与飞书 ID 对应成功"}
 
 
 @app.get("/api/employees/missing")
@@ -360,46 +378,35 @@ def get_fonts(_=Depends(auth)):
 @app.post("/api/templates")
 def save_templates(payload: dict = Body(...), _=Depends(auth)):
     cfg = templates.merge_config(compose.load_config(), payload)
-    _render_preview(cfg, {})
+    _render_preview(cfg)
     templates.save_config(cfg)
     return {"ok": True}
 
 
 @app.post("/api/templates/{key}/background")
-async def upload_background(key: str, file: UploadFile = File(...), _=Depends(auth)):
-    if key not in compose.load_config()["templates"]:
+async def upload_background(key: str, file: UploadFile = File(...), fit: str = Query("cover"), _=Depends(auth)):
+    cfg = compose.load_config()
+    if key not in cfg["templates"]:
         raise ValueError("未知模板")
     raw = await file.read(10 * 1024 * 1024 + 1)
-    return templates.save_base_image(raw, file.filename or "", max_bytes=10 * 1024 * 1024)
+    return templates.save_base_image(raw, file.filename or "", max_bytes=10 * 1024 * 1024,
+                                     size=templates.background_size(cfg, key), fit=fit)
 
 
-def _render_preview(cfg, payload):
-    day = parse_date(payload.get("event_date") or now()[:10])
-    if not day:
-        raise ValueError("预览日期无效")
-    if payload.get("employee_id"):
-        emp = query_one("SELECT * FROM employees WHERE id=?", (payload["employee_id"],))
-        if not emp:
-            raise ValueError("预览员工不存在")
-    else:
-        # With no recorded employee selected, show template fields literally.
-        emp = {field: "{" + field + "}" for field in
-               ("name", "department", "join_date", "birth_date", "id")}
-        emp["id"] = "{employee_id}"
-    images = {}
+def _render_preview(cfg):
+    # Preview is solely for design. Employee/event values are bound by the generation pipeline.
+    ctx = {field: "{" + field + "}" for field in templates.PLACEHOLDERS if field != "company"}
+    images, sizes = {}, {}
     for key in cfg["templates"]:
-        event_years = "{years}"
-        if payload.get("employee_id"):
-            source_date = parse_date(emp.get("join_date" if key == "anniversary" else "birth_date"))
-            event_years = max(0, day.year - source_date.year) if source_date and (key == "anniversary" or source_date.year > 1901) else ""
-        ctx = pipeline.build_context({"event_date": day.isoformat(), "years": event_years}, emp)
         path = OUTPUT_DIR / f"preview_{key}_{uuid.uuid4().hex}.png"
         compose.render(key, ctx, out_path=path, cfg=cfg)
         images[key] = "/files/" + path.name
-    return {"ok": True, "images": images}
+        width, height = templates.background_size(cfg, key)
+        sizes[key] = {"width": width, "height": height}
+    return {"ok": True, "images": images, "sizes": sizes}
 
 
 @app.post("/api/templates/preview")
 def preview_template(payload: dict = Body(...), _=Depends(auth)):
     cfg = templates.merge_config(compose.load_config(), {k: payload[k] for k in ("templates", "vars", "canvas") if k in payload})
-    return _render_preview(cfg, payload)
+    return _render_preview(cfg)

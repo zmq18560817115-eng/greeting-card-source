@@ -374,7 +374,17 @@ def list_fonts():
     return fonts.list_fonts()
 
 
-def save_base_image(data, filename="background", *, directory=None, max_bytes=20 * 1024 * 1024):
+def background_size(cfg, key):
+    """Keep replacement backgrounds on the template's existing coordinate system."""
+    tpl = cfg["templates"][key]
+    if tpl.get("base_image"):
+        with read_image(asset_path(tpl["base_image"])) as image:
+            return image.size
+    return cfg["canvas"]["width"], cfg["canvas"]["height"]
+
+
+def save_base_image(data, filename="background", *, directory=None, max_bytes=20 * 1024 * 1024,
+                    size=None, fit="cover"):
     """接收 bytes 或二进制 file（例如 UploadFile.file）；返回未应用的底图元数据。
 
     按实际文件内容验证，重编码为 PNG，忽略客户端文件路径并生成唯一文件名。
@@ -384,16 +394,37 @@ def save_base_image(data, filename="background", *, directory=None, max_bytes=20
         data = data.read(max_bytes + 1)
     if not isinstance(data, (bytes, bytearray)) or not data or len(data) > max_bytes:
         raise TemplateError(f"上传必须为非空图片，且不超过 {max_bytes} 字节")
-    with read_image(BytesIO(data)) as im:
-        stem = PureWindowsPath(str(filename or "background")).stem
-        stem = "".join(ch for ch in stem if ch.isalnum() or ch in "-_")[:60] or "background"
-        target = Path(TEMPLATE_DIR if directory is None else directory).resolve() / f"{stem}_{uuid.uuid4().hex}.png"
-        _atomic_write(target, lambda stream: im.save(stream, "PNG"))
+    if fit not in ("cover", "contain"):
+        raise TemplateError("底图适配方式须为铺满或完整保留")
+    if size is not None:
+        if not isinstance(size, (list, tuple)) or len(size) != 2:
+            raise TemplateError("底图画布尺寸无效")
+        for axis in size:
+            _number(axis, "底图画布尺寸", 1, 16384, integer=True)
+        if size[0] * size[1] > MAX_PIXELS:
+            raise TemplateError("底图画布像素过大")
+    with read_image(BytesIO(data)) as original:
+        im = original
+        if size is not None:
+            im = (ImageOps.fit(original, size, Image.Resampling.LANCZOS) if fit == "cover"
+                  else ImageOps.pad(original, size, Image.Resampling.LANCZOS, color="white"))
         try:
-            value = target.relative_to(Path(BASE_DIR).resolve()).as_posix()
-        except ValueError:
-            value = str(target)
-        return {"base_image": value, "width": im.width, "height": im.height}
+            return _store_base_image(im, filename, directory)
+        finally:
+            if im is not original:
+                im.close()
+
+
+def _store_base_image(im, filename, directory):
+    stem = PureWindowsPath(str(filename or "background")).stem
+    stem = "".join(ch for ch in stem if ch.isalnum() or ch in "-_")[:60] or "background"
+    target = Path(TEMPLATE_DIR if directory is None else directory).resolve() / f"{stem}_{uuid.uuid4().hex}.png"
+    _atomic_write(target, lambda stream: im.save(stream, "PNG"))
+    try:
+        value = target.relative_to(Path(BASE_DIR).resolve()).as_posix()
+    except ValueError:
+        value = str(target)
+    return {"base_image": value, "width": im.width, "height": im.height}
 
 
 # main 端兼容名称，返回结构及异常与上述接口完全相同。
