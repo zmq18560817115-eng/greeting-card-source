@@ -117,7 +117,7 @@ def push_event(event_id, operator="auto", force=False, with_text=True):
             send_started = True
             message_id = feishu.send_card(
                 emp["feishu_open_id"], CARD_TITLE[event["event_type"]],
-                "为你准备了一份专属贺卡，点击下方海报查看大图。",
+                "你收到一份专属祝福。\n点击右侧小图，打开完整贺卡。",
                 image_key, uuid=delivery_uuid)
             status = "pushed"
         with tx() as conn:

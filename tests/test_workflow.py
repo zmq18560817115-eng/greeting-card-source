@@ -24,6 +24,8 @@ class WorkflowTests(unittest.TestCase):
             patch.object(pipeline, "CARD_DIR", self.root / "cards"),
             patch.object(main, "OUTPUT_DIR", self.root),
             patch.object(main, "ADMIN_TOKEN", ""),
+            patch("requests.sessions.Session.request", side_effect=AssertionError("离线测试不得访问真实飞书")),
+            patch.object(feishu, "list_scope_users", return_value=[self.remote_user("ou_test")]),
             patch.object(feishu, "get_user", side_effect=self.remote_user),
             patch.object(feishu, "get_department", return_value={"open_department_id": "od_sales", "name": "市场中心"}),
             patch.object(feishu, "upload_image", return_value="image_test"),

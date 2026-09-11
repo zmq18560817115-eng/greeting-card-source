@@ -285,17 +285,16 @@ def ping():
 
 
 def send_card(open_id, title, md_text, image_key, note="HR 关怀", uuid=None):
-    """以消息卡片形式推送：文案 + 收起的图片（点击才打开大图）。"""
+    """发送简短通知和小缩略图，点击后在飞书内预览完整海报。"""
     card = {
-        "config": {"wide_screen_mode": True},
+        "config": {"wide_screen_mode": False},
         "header": {"template": "turquoise",
                    "title": {"tag": "plain_text", "content": title}},
         "elements": [
-            {"tag": "div", "text": {"tag": "lark_md", "content": md_text}},
-            {"tag": "img", "img_key": image_key,
-             "mode": "fit_horizontal", "preview": True,
-             "alt": {"tag": "plain_text", "content": title}},
-            {"tag": "hr"},
+            {"tag": "div", "text": {"tag": "lark_md", "content": md_text},
+             # extra 图片固定为 64×64；复用完整原图，点击预览时不损失清晰度。
+             "extra": {"tag": "img", "img_key": image_key, "preview": True,
+                       "alt": {"tag": "plain_text", "content": f"点击查看完整{title}"}}},
             {"tag": "note", "elements": [{"tag": "plain_text", "content": note}]},
         ],
     }

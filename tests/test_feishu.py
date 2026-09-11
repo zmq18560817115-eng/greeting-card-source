@@ -40,15 +40,27 @@ class FeishuContractTests(unittest.TestCase):
             with self.assertRaises(feishu.FeishuError):
                 feishu.list_scope_users()
 
-    def test_send_card_uses_idempotency_and_clickable_image(self):
+    def test_send_card_is_compact_and_opens_original_image(self):
         with patch.object(feishu, "_post", return_value={"data": {"message_id": "om_1"}}) as post:
-            feishu.send_card("ou_employee", "贺卡", "点击查看", "img_1", uuid="unique")
+            message_id = feishu.send_card("ou_employee", "贺卡", "点击查看", "img_1", uuid="unique")
+        self.assertEqual(message_id, "om_1")
+        post.assert_called_once()
         payload = post.call_args.args[1]
+        self.assertEqual(payload["msg_type"], "interactive")
         self.assertEqual(payload["receive_id"], "ou_employee")
         self.assertEqual(payload["uuid"], "unique")
         self.assertEqual(post.call_args.kwargs["params"], {"receive_id_type": "open_id"})
         card = json.loads(payload["content"])
-        self.assertTrue(next(item for item in card["elements"] if item["tag"] == "img")["preview"])
+        self.assertFalse(card["config"]["wide_screen_mode"])
+        # 根级 img 会撑开整张长海报；div.extra 则是飞书固定尺寸的小图。
+        self.assertNotIn("img", [item["tag"] for item in card["elements"]])
+        content = next(item for item in card["elements"] if item["tag"] == "div")
+        self.assertEqual(content["text"]["content"], "点击查看")
+        thumbnail = content["extra"]
+        self.assertEqual(thumbnail["tag"], "img")
+        self.assertEqual(thumbnail["img_key"], "img_1")
+        self.assertTrue(thumbnail["preview"])
+        self.assertIn("点击查看", thumbnail["alt"]["content"])
 
     def test_explicit_rejection_vs_unknown_http_error(self):
         for status, definite in [(400, True), (403, True), (408, False), (500, False)]:
