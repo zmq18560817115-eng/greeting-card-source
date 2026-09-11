@@ -191,12 +191,21 @@ def _group_scope_ids(group_ids):
                                    {"member_id_type": "open_id", "member_type": kind, "page_size": 100}):
                     for member in data.get("memberlist") or []:
                         allowed_types = ("open_id",) if kind == "user" else ("open_id", "open_department_id")
-                        if (not isinstance(member, dict) or member.get("member_type") != kind
-                                or member.get("member_id_type") not in allowed_types
-                                or not isinstance(member.get("member_id"), str) or not member["member_id"].strip()
-                                or (kind == "user" and not member["member_id"].startswith("ou_"))):
+                        mid = member.get("member_id") if isinstance(member, dict) else None
+                        mtype = member.get("member_type") if isinstance(member, dict) else None
+                        mid_type = member.get("member_id_type") if isinstance(member, dict) else None
+                        # 兼容未返回 member_id_type 的成员；请求已指定 open_id，缺失时按前缀推断。
+                        if mid_type is None and isinstance(mid, str):
+                            if mid.startswith("ou_"):
+                                mid_type = "open_id"
+                            elif mid.startswith("od-") or mid.startswith("od"):
+                                mid_type = "open_department_id"
+                        if (not isinstance(member, dict) or mtype != kind
+                                or mid_type not in allowed_types
+                                or not isinstance(mid, str) or not mid.strip()
+                                or (kind == "user" and not mid.startswith("ou_"))):
                             raise FeishuError(-1, "用户组成员未返回有效的开放 ID，不能确认完整名单")
-                        target.add(member["member_id"])
+                        target.add(mid)
         except FeishuError as exc:
             hint = ("请开通“读取用户组”权限 contact:group:readonly 并发布应用后重试。"
                     if exc.code == 99991672 else "请检查用户组权限范围或返回资料。")

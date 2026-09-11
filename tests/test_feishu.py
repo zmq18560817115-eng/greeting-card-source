@@ -80,6 +80,60 @@ class FeishuContractTests(unittest.TestCase):
             with self.assertRaisesRegex(feishu.FeishuError, '停止自动对应和推送'):
                 feishu.list_scope_users()
 
+    def test_group_members_without_id_type_resolve_users_and_departments(self):
+        for type_fields in ({}, {'member_id_type': None}):
+            for department_id in ('od-group', 'od_group'):
+                def get(path, params):
+                    if path.endswith('/scopes'):
+                        return {'data': {'group_ids': ['g1']}}
+                    if path.endswith('/member/simplelist'):
+                        self.assertEqual(params['member_id_type'], 'open_id')
+                        kind = params['member_type']
+                        member_id = 'ou_direct' if kind == 'user' else department_id
+                        return {'data': {'memberlist': [{
+                            'member_type': kind, 'member_id': member_id, **type_fields}]}}
+                    if path.endswith('/children'):
+                        self.assertEqual(params['department_id_type'], 'open_department_id')
+                        self.assertIn('/' + department_id + '/children', path)
+                        return {'data': {'items': [{'open_department_id': 'od-child'}]}}
+                    if path.endswith('/find_by_department'):
+                        self.assertEqual(params['user_id_type'], 'open_id')
+                        self.assertEqual(params['department_id_type'], 'open_department_id')
+                        oid = 'ou_child' if params['department_id'] == 'od-child' else 'ou_parent'
+                        return {'data': {'items': [{'open_id': oid, 'name': oid}]}}
+                    self.assertEqual(path, '/open-apis/contact/v3/users/ou_direct')
+                    return {'data': {'user': {'open_id': 'ou_direct', 'name': 'direct'}}}
+
+                with self.subTest(type_fields=type_fields, department_id=department_id), \
+                        patch.object(feishu, '_get', side_effect=get):
+                    self.assertEqual({u['open_id'] for u in feishu.list_scope_users()},
+                                     {'ou_direct', 'ou_parent', 'ou_child'})
+
+    def test_group_id_inference_does_not_override_invalid_members(self):
+        cases = [
+            ('user', {'member_type': 'user', 'member_id': 'ou_a', 'member_id_type': 'user_id'}),
+            ('department', {'member_type': 'department', 'member_id': 'od-a', 'member_id_type': 'department_id'}),
+            ('user', {'member_type': 'user', 'member_id': 'ou_a', 'member_id_type': ''}),
+            ('user', {'member_type': 'user', 'member_id': 'od-a'}),
+            ('user', {'member_type': 'department', 'member_id': 'ou_a'}),
+            ('user', {'member_type': 'user', 'member_id': 'user123'}),
+            ('department', {'member_type': 'department', 'member_id': 'department123'}),
+            ('user', {'member_type': 'user', 'member_id': ' '}),
+            ('user', {'member_type': 'user', 'member_id': 123}),
+            ('user', {'member_type': 'user'}),
+            ('user', None),
+        ]
+        for kind, member in cases:
+            def get(path, params):
+                if path.endswith('/scopes'):
+                    return {'data': {'group_ids': ['g1']}}
+                self.assertTrue(path.endswith('/member/simplelist'))
+                return {'data': {'memberlist': [member] if params['member_type'] == kind else []}}
+
+            with self.subTest(kind=kind, member=member), patch.object(feishu, '_get', side_effect=get):
+                with self.assertRaisesRegex(feishu.FeishuError, '停止自动对应和推送'):
+                    feishu.list_scope_users()
+
     def test_conflicting_name_for_one_open_id_is_not_overwritten(self):
         def get(path, params):
             if path.endswith('/scopes'):
