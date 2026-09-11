@@ -142,7 +142,7 @@ class TemplateTests(unittest.TestCase):
             self.assertEqual(options[0]["value"], "auto")
             self.assertGreater(len(options), 1)
             for option in options:
-                self.assertEqual(set(option), {"value", "label"})
+                self.assertTrue({"value", "label", "source"}.issubset(option))
                 fonts.resolve(option["value"])
 
     @unittest.skipUnless(os.name == "nt", "Windows 字体集成")

@@ -4,7 +4,7 @@
 let DRAFT = null;
 
 const templateEditor = (() => {
-  let fonts = [], dirty = false, savedDraft = '';
+  let fonts = [], fontUploadAvailable = false, dirty = false, savedDraft = '';
   let revision = 0, previewRevision = -1, previewRequest = 0;
   let images = {}, sizes = {}, previewError = '', timer = null;
   let backgroundKey = '', backgroundURL = '', backgroundReady = false;
@@ -103,18 +103,18 @@ const templateEditor = (() => {
     const tpl = currentTemplate();
     if (!tpl) return;
     const body = tpl.layers[1];
-    const choices = new Map([['auto', '自动选择字体']]);
-    const chineseFonts = { 'msyh.ttc':'微软雅黑', 'simsun.ttc':'宋体', 'simhei.ttf':'黑体',
-      'simkai.ttf':'楷体', 'simfang.ttf':'仿宋', 'deng.ttf':'等线',
-      'notosanssc-vf.ttf':'思源黑体', 'notoserifsc-vf.ttf':'思源宋体' };
+    const choices = new Map();
     for (const font of fonts) {
-      if (typeof font?.value !== 'string' || !font.value) continue;
-      const filename = font.value.split(/[\\/]/).pop().toLowerCase();
-      const label = chineseFonts[filename];
-      if (label || /(?:^|[\\/])assets[\\/]fonts[\\/]/i.test(font.value)) choices.set(font.value, label || font.label);
+      if (typeof font?.value !== 'string' || !font.value || font.value === 'auto') continue;
+      const source = font.source || (/^builtin[\\/]/i.test(font.value) ? 'builtin' : /^uploaded[\\/]/i.test(font.value) ? 'uploaded' : !/^(?:[A-Za-z]:|\/)/.test(font.value) ? 'project' : 'server');
+      choices.set(font.value, {...font,source});
     }
-    if (!choices.has(body.font)) choices.set(body.font, body.font);
-    const options = [...choices].map(([value, label]) => `<option value="${esc(value)}"${body.font === value ? ' selected' : ''}>${esc(label)}</option>`).join('');
+    if (body.font !== 'auto' && !choices.has(body.font)) choices.set(body.font, {value:body.font,label:body.font,source:'current'});
+    const groups = [['builtin','系统内置字体'],['uploaded','上传的字体'],['project','项目字体'],['server','服务器字体'],['current','当前模板字体']];
+    const options = `<option value="auto"${body.font === 'auto' ? ' selected' : ''}>自动选择字体（优先内置）</option>` + groups.map(([source,label])=>{
+      const items = [...choices.values()].filter(font=>(font.source || 'server') === source);
+      return items.length ? `<optgroup label="${label}">${items.map(font=>`<option value="${esc(font.value)}"${body.font === font.value ? ' selected' : ''}>${esc(font.label || font.value)}</option>`).join('')}</optgroup>` : '';
+    }).join('');
     $('#tpl-company').innerHTML = `<div class="hint" style="margin-top:14px"><b>名单姓名 → 自动称呼</b><p>${esc(tpl.layers[0].text || '{name}')}</p></div>
       <label class="field" style="margin-top:14px">公司名称（所有模板共用）<input id="te-company" data-te-field="company" value="${esc(DRAFT.vars.company)}"></label>
       <p class="meta" style="margin-top:8px">公司落款默认右对齐，与正文右边缘对齐；随正文高度自动下移。</p>`;
@@ -123,7 +123,9 @@ const templateEditor = (() => {
       <textarea id="te-body" data-te-field="text" rows="6" style="text-align:${cssAlign[bodyAlignment(body)]}" aria-describedby="te-body-help">${esc(body.text)}</textarea>
       <div class="bar" aria-label="插入名单字段">${[['name', '姓名'], ['department', '部门'], ['years', '周年数'], ['date', '事件日期']].map(([key, label]) => `<button type="button" data-te-token="${key}" title="插入${label}" aria-label="插入${label}字段">${esc('{' + key + '}')} ${label}</button>`).join('')}</div>
       <p class="meta" id="te-body-help">对齐方式应用于整段正文。空格、换行和空行会保留；「插入空格」添加两个中文空格。字段自动对应名单。</p>
-      <div class="grid" style="margin-top:14px"><label class="field">文案字体<select id="te-font" data-te-field="font">${options}</select></label><label class="field">文案字号<input id="te-size" data-te-field="size" type="number" min="1" max="512" step="1" required value="${esc(body.size)}"></label><label><input id="te-bold" data-te-field="bold" type="checkbox"${body.bold ? ' checked' : ''}> 文案加粗</label></div>`;
+      <div class="grid" style="margin-top:14px"><label class="field">文案字体<select id="te-font" data-te-field="font">${options}</select></label><label class="field">文案字号<input id="te-size" data-te-field="size" type="number" min="1" max="512" step="1" required value="${esc(body.size)}"></label><label><input id="te-bold" data-te-field="bold" type="checkbox"${body.bold ? ' checked' : ''}> 文案加粗</label></div>
+      <div class="bar font-tools"><button type="button" id="te-upload-font"${fontUploadAvailable ? '' : ' disabled title="重启后台服务后启用字体上传"'}>上传字体</button><input id="te-font-file" type="file" accept=".ttf,.otf,.ttc,.otc" aria-label="选择字体文件" hidden><span class="meta">${fontUploadAvailable ? 'TTF / OTF / TTC / OTC，最大 32 MB' : '重启后台服务后可上传字体'}</span></div>
+      <p class="meta font-help">使用内置字体可保持不同电脑上的生成效果一致。上传的字体可供所有管理员选择，保存模板后用于新海报。</p>`;
     $('#te-body').value = body.text;
     renderBackground();
     renderPreview();
@@ -186,6 +188,7 @@ const templateEditor = (() => {
         if (results[0].status === 'rejected') throw results[0].reason;
         const draft = normalize(requireOK(results[0].value));
         const fontResult = results[1];
+        fontUploadAvailable = fontResult.status === 'fulfilled' && fontResult.value?.upload_supported === true;
         if (fontResult.status === 'fulfilled' && fontResult.value?.ok !== false && Array.isArray(fontResult.value?.fonts)) fonts = fontResult.value.fonts;
         else {
           fonts = [];
@@ -344,6 +347,26 @@ const templateEditor = (() => {
     if (uploaded) await previewTpl();
   }
 
+  async function uploadFont(input) {
+    const file = input.files[0], key = currentKey();
+    if (!file || !DRAFT || BUSY.has('tpl')) return;
+    let uploaded = false;
+    await busy('tpl', 'tpl', async () => {
+      try {
+        if (!/\.(ttf|otf|ttc|otc)$/i.test(file.name)) throw new Error('仅支持 TTF、OTF、TTC、OTC 字体文件');
+        if (!file.size || file.size > 32 * 1024 * 1024) throw new Error('字体文件不能为空，且不能超过 32 MB');
+        const form = new FormData(); form.append('file', file);
+        const result = requireOK(await api('/api/fonts', {method:'POST',body:form}));
+        if (typeof result.font?.value !== 'string' || !result.font.value) throw new Error('上传接口未返回有效字体');
+        fonts = [...fonts.filter(font=>font.value !== result.font.value), result.font];
+        DRAFT.templates[key].layers[1].font = result.font.value;
+        draftChanged(); render(); uploaded = true;
+        report('tpl', '字体已上传并加入草稿', [`${file.name}：已用于当前文案预览，点击「保存模板」后正式生效。`]);
+      } finally { input.value = ''; }
+    });
+    if (uploaded) await previewTpl();
+  }
+
   async function reset() {
     if (BUSY.has('tpl')) return;
     if (dirty && !await askConfirm('放弃模板草稿', '将重载已保存的配置，所有模板尚未保存的文案、字体和底图修改会丢失。', [], '放弃修改')) return;
@@ -358,6 +381,12 @@ const templateEditor = (() => {
     $('#tpl-company').addEventListener('input', edit);
     $('#tpl-editor').addEventListener('click', insertField);
     $('#tpl-editor').addEventListener('click', formatBody);
+    $('#tpl-editor').addEventListener('click', event => {
+      if (event.target.closest('#te-upload-font') && !BUSY.has('tpl')) $('#te-font-file').click();
+    });
+    $('#tpl-editor').addEventListener('change', event => {
+      if (event.target.id === 'te-font-file') uploadFont(event.target);
+    });
     $('#tpl-background').addEventListener('click', event => {
       if (event.target.closest('#te-replace-background')) openBackground();
     });

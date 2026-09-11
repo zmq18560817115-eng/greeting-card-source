@@ -11,7 +11,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import bindings, compose, employees, feishu, feishu_config, pipeline, presentation, push, scheduler, staff_template, sync, templates
+from . import bindings, compose, employees, feishu, feishu_config, fonts, pipeline, presentation, push, scheduler, staff_template, sync, templates
 from .dates import completed_years_since, next_cycle, parse_date, this_cycle
 from .db import init_db, now, query, query_one, tx
 from .settings import ADMIN_TOKEN, BASE_DIR, DRY_RUN, OUTPUT_DIR
@@ -372,7 +372,13 @@ def get_templates(_=Depends(auth)):
 
 @app.get("/api/fonts")
 def get_fonts(_=Depends(auth)):
-    return {"fonts": templates.list_fonts()}
+    return {"fonts": templates.list_fonts(), "upload_supported": True}
+
+
+@app.post("/api/fonts")
+async def upload_font(file: UploadFile = File(...), _=Depends(auth)):
+    raw = await file.read(fonts.MAX_UPLOAD_BYTES + 1)
+    return fonts.save_uploaded_font(raw, file.filename or "")
 
 
 @app.post("/api/templates")

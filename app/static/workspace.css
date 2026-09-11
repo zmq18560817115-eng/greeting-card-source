@@ -16,6 +16,7 @@
 .audit-table .empty{text-align:left;padding-left:44px}
 .preview-help{font-size:11px;color:var(--muted);line-height:1.8;margin:8px 0 14px}.background-manager{padding:16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.background-manager h3{margin:0}.background-manager button{font-size:12px;padding:6px 10px}.background-name{font-size:12px;margin:10px 0 4px;overflow-wrap:anywhere;color:#6f7483}#background-dialog{width:500px}#background-dialog .field{margin:14px 0 7px}#background-target{margin-bottom:12px}.background-sample{height:240px;max-width:100%;margin:14px auto;background:#fff;box-shadow:0 0 0 1px var(--line);overflow:hidden}.background-sample img{display:block;width:100%;height:100%;object-fit:cover}#background-fields .hint{font-size:12px}
 .tpl-layout{row-gap:24px;align-items:start}.tpl-layout>.tpl-form{min-width:0}.tpl-copy-panel{margin-top:22px}#tpl-company .hint{background:#fafbfc;padding:12px 14px;border-radius:6px;line-height:1.8}#tpl-company input{width:100%}
+.font-tools{margin-top:12px;gap:9px}.font-tools button{font-size:12px}.font-help{margin-top:8px;line-height:1.7}
 .staff-date-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:13px}
 .filter-bar .staff-date-range input{width:145px;min-width:0;flex:none}
 .filter-bar .staff-date-range select{width:82px;min-width:0;flex:none}

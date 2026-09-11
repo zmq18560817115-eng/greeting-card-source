@@ -10,6 +10,7 @@ data/
 output/
 logs/
 feishu_probe_result.csv
+assets/fonts/uploaded/
 *.db
 *.db-wal
 *.db-shm
