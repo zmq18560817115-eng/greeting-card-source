@@ -240,6 +240,38 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual((saved["join_date"], saved["birth_date"]), ("2026-08-03", "1896-02-29"))
                 self.assertEqual(db.query_one("SELECT join_date FROM employees WHERE id=?", (self.emp["id"],))["join_date"], "2021-02-01")
 
+    def test_review_fields_derive_service_years_separately_from_birthday_age(self):
+        eid, _ = self.prepare()
+        response = self.client.get(f"/api/events/{eid}")
+        self.assertEqual(response.status_code, 200, response.text)
+        view = response.json()
+        self.assertEqual(view["event_type"], "birthday")
+        self.assertEqual((view["years"], view["anniversary_years"]), (31, 3))
+        self.assertEqual(view["employee"]["employee_no"], "E001")
+        self.assertEqual(view["employee"]["join_date"], "2023-09-10")
+        self.assertEqual(view["employee"]["birth_date_display"], "1995-09-10")
+        self.assertFalse(view["is_pushed"])
+        self.assertIsNone(view["actual_push_at"])
+        self.assertEqual(view["planned_push_at"], view["trigger_at"])
+        employees.save_employee({"id": self.emp["id"], "join_date": "2022年9月10日", "anniversary_years": 999})
+        changed = self.client.get(f"/api/events/{eid}").json()
+        self.assertEqual(changed["anniversary_years"], 4)
+        self.assertIn("重新生成", changed["exception_hint"])
+        listing = self.client.get("/api/employees").json()
+        self.assertIn("anniversary_years", listing[0])
+        self.assertNotIn("anniversary_years", db.query_one("SELECT * FROM employees WHERE id=?", (self.emp["id"],)))
+
+    def test_review_exception_and_delivery_state_are_consistent_in_list_and_detail(self):
+        eid, _ = self.prepare()
+        db.execute("UPDATE events SET status='delivery_unknown',last_error='ReadTimeout: timed out' WHERE id=?", (eid,))
+        detail = self.client.get(f"/api/events/{eid}").json()
+        item = next(row for row in self.client.get("/api/events").json() if row["id"] == eid)
+        self.assertEqual(detail["exception_hint"], item["exception_hint"])
+        self.assertIn("暂勿重新发送", detail["exception_hint"])
+        self.assertIsNone(detail["is_pushed"])
+        self.assertIsNone(detail["actual_push_at"])
+        self.assertEqual(detail["last_error"], "ReadTimeout: timed out")
+
     def test_xlsx_and_duplicate_headers(self):
         import openpyxl
         workbook = openpyxl.Workbook()

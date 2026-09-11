@@ -14,13 +14,15 @@
 </header>
 <main>
 <section id="tab-events">
-  <div class="page-head"><div><h2>海报审核</h2><p>查看贺卡、核对收件人，批量确认发送排期。</p></div><div class="page-head-actions"><button id="scan" class="primary">＋ 扫描生成</button></div></div>
+  <div class="page-head"><div><h2>海报审核</h2><p>核对员工基本信息与发送结果；入职周年数按贺卡日期自动计算。</p></div><div class="page-head-actions"><button id="scan" class="primary">＋ 扫描生成</button></div></div>
   <div class="filter-bar" aria-label="筛选海报">
-    <input id="event-search" type="search" placeholder="搜索姓名、部门或飞书 ID" aria-label="搜索海报">
+    <input id="event-search" type="search" placeholder="搜索姓名、工号、部门或 ID" aria-label="搜索海报">
     <select id="scope" aria-label="审核周期"><option value="all">全部时间</option><option value="this">本周</option><option value="next">下周</option><option value="pending">待处理</option></select>
     <select id="event-type" aria-label="贺卡类型"><option value="">全部类型</option><option value="birthday">生日</option><option value="anniversary">入职周年</option></select>
     <select id="event-status" aria-label="审核状态"><option value="">全部状态</option><option value="ready">待确认</option><option value="confirmed">已确认待推送</option><option value="needs_regeneration">需重新生成</option><option value="blocked">核验阻止</option><option value="generating">生成中</option><option value="gen_failed">生成失败</option><option value="failed">推送失败</option><option value="pushing">推送中</option><option value="pushed">已推送</option><option value="simulated">演练完成</option><option value="skipped">已跳过</option><option value="delivery_unknown">发送回执不明</option><option value="expired">已过期</option></select>
     <select id="event-department" aria-label="海报部门"><option value="">全部部门</option></select>
+    <select id="event-delivery" aria-label="是否推送"><option value="">全部推送结果</option><option value="sent">已推送</option><option value="not_sent">未推送</option><option value="sending">推送中</option><option value="unknown">回执不明</option><option value="simulated">演练未发送</option></select>
+    <select id="event-issues" aria-label="异常筛选"><option value="">全部记录</option><option value="issues">有异常提醒</option><option value="clear">无异常提醒</option></select>
     <span class="spacer"></span><select id="event-sort" aria-label="日期排序"><option value="asc">日期 ↑</option><option value="desc">日期 ↓</option></select><span id="events-loading" class="meta" role="status"></span>
   </div>
   <div id="event-reports" class="reports" aria-live="polite"></div>

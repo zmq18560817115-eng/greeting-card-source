@@ -17,6 +17,7 @@ from urllib.parse import quote
 import requests
 
 from .settings import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_BASE
+from .presentation import friendly_error
 
 log = logging.getLogger("feishu")
 
@@ -80,7 +81,9 @@ def connection_error(exc):
         for secret in (FEISHU_APP_SECRET, _token.get("value")):
             if secret:
                 message = message.replace(secret, "[已隐藏]")
-        return message[:800]
+        message = message[:800]
+        hint = friendly_error(message)
+        return message if hint == message else f"{hint}\n技术信息：{message}"
     if isinstance(exc, requests.exceptions.Timeout):
         return "连接飞书超时，请检查网络后重试"
     if isinstance(exc, requests.exceptions.RequestException):

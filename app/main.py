@@ -11,8 +11,8 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import compose, employees, feishu, feishu_config, pipeline, push, scheduler, sync, templates
-from .dates import next_cycle, parse_date, this_cycle
+from . import compose, employees, feishu, feishu_config, pipeline, presentation, push, scheduler, sync, templates
+from .dates import completed_years_since, next_cycle, parse_date, this_cycle
 from .db import init_db, now, query, query_one, tx
 from .settings import ADMIN_TOKEN, BASE_DIR, DRY_RUN, OUTPUT_DIR
 
@@ -50,10 +50,13 @@ def _event_view(ev):
     cards = query("SELECT * FROM cards WHERE event_id=? ORDER BY idx", (ev["id"],))
     for card in cards:
         card["url"] = f"/files/cards/{Path(card['file_path']).name}" if card.get("file_path") else None
-    return {**ev, "employee": {k: emp.get(k) for k in
-            ("id", "name", "department", "join_date", "birth_date", "active",
+    return {**ev, **presentation.delivery_fields(ev),
+            "anniversary_years": completed_years_since(emp.get("join_date"), ev.get("event_date")) if parse_date(ev.get("event_date")) else None,
+            "exception_hint": presentation.event_notice(ev, emp),
+            "employee": presentation.employee_fields({k: emp.get(k) for k in
+            ("id", "name", "employee_no", "department", "join_date", "birth_date", "active", "email",
              "identity_status", "identity_error", "identity_verified_at")} |
-            {"open_id": emp.get("feishu_open_id")}, "cards": cards}
+            {"open_id": emp.get("feishu_open_id")}), "cards": cards}
 
 
 @app.get("/api/events")
@@ -140,7 +143,7 @@ def list_employees(keyword: str = "", only_active: bool = True, _=Depends(auth))
     if keyword:
         sql += " AND (name LIKE ? OR employee_no LIKE ? OR email LIKE ? OR department LIKE ? OR feishu_open_id LIKE ?)"
         params += [f"%{keyword}%"] * 5
-    return query(sql + " ORDER BY name,id", params)
+    return [presentation.employee_fields(emp) for emp in query(sql + " ORDER BY name,id", params)]
 
 
 @app.post("/api/employees")

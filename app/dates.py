@@ -55,6 +55,17 @@ def _same_md(src: date, target: date):
     return False
 
 
+def completed_years_since(start, as_of=None):
+    """Completed service years; missing dates stay unknown, leap days use Feb 28."""
+    joined = start if isinstance(start, date) else parse_date(start)
+    day = as_of if isinstance(as_of, date) else parse_date(as_of) if as_of else datetime.now(ZoneInfo(TZ)).date()
+    if not joined or not day:
+        return None
+    anniversary_day = min(joined.day, calendar.monthrange(day.year, joined.month)[1])
+    anniversary = date(day.year, joined.month, anniversary_day)
+    return max(0, day.year - joined.year - int(day < anniversary))
+
+
 def match_employee(emp, cycle_start, cycle_end):
     """返回该员工在周期内命中的事件列表 [{event_type, event_date, years, trigger_at}]。"""
     out = []
