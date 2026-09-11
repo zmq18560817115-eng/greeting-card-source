@@ -208,6 +208,22 @@ class FeishuContractTests(unittest.TestCase):
         self.assertEqual(card["elements"][0]["mode"], "fit_horizontal")
         self.assertTrue(card["elements"][0]["preview"])
 
+    def test_compact_greeting_text_banner_and_blank_area_share_one_link(self):
+        with patch.object(feishu, '_post', return_value={'data':{'message_id':'om_compact'}}) as post:
+            feishu.send_greeting('ou_recipient', '<姓名>', '生日贺卡', 'img_banner',
+                                'http://192.168.1.20:8848/greeting/opaque', 'stable_uuid')
+        payload=post.call_args.args[1]
+        card=json.loads(payload['content'])
+        self.assertEqual(payload['receive_id'],'ou_recipient')
+        self.assertEqual(payload['uuid'],'stable_uuid')
+        self.assertFalse(card['config']['wide_screen_mode'])
+        self.assertFalse(card['config']['enable_forward'])
+        self.assertEqual(card['card_link']['url'],'http://192.168.1.20:8848/greeting/opaque')
+        self.assertEqual(card['elements'][0]['text'],{'tag':'plain_text','content':'<姓名>，你有一张生日贺卡，请查收！'})
+        self.assertEqual(card['elements'][1]['img_key'],'img_banner')
+        self.assertFalse(card['elements'][1]['preview'])
+        self.assertEqual(len(card['elements']),2)
+
     def test_missing_receipt_is_not_treated_as_success(self):
         for message_id in (None, "", " "):
             with self.subTest(message_id=message_id), patch.object(feishu, "_post", return_value={"data": {"message_id": message_id}}):

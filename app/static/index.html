@@ -4,7 +4,7 @@
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>员工贺卡 · 人事工作台</title>
 <link rel="stylesheet" href="/static/workspace.css">
-<script defer src="/static/staff-filters.js"></script><script defer src="/static/review-status.js"></script><script defer src="/static/review-search.js"></script><script defer src="/static/row-selection.js"></script><script defer src="/static/workspace.js"></script><script defer src="/static/staff-batch.js"></script><script defer src="/static/template-editor.js"></script>
+<script defer src="/static/staff-filters.js"></script><script defer src="/static/review-status.js"></script><script defer src="/static/review-search.js"></script><script defer src="/static/row-selection.js"></script><script defer src="/static/admin-login.js"></script><script defer src="/static/workspace.js"></script><script defer src="/static/staff-batch.js"></script><script defer src="/static/template-editor.js"></script>
 </head>
 <body>
 <header>
@@ -14,7 +14,7 @@
 </header>
 <main>
 <section id="tab-events">
-  <div class="page-head"><div><h2>海报审核</h2><p>生日只按月日推送，不计算年龄；入职周年按完整入职年月日计算。</p></div><div class="page-head-actions"><button id="scan" class="primary">＋ 扫描生成</button></div></div>
+  <div class="page-head"><div><h2>海报审核</h2><p>系统按生日月日、入职周年自动排期推送；可抽查海报或跳过本次，无需逐条确认。</p></div><div class="page-head-actions"><span id="auto-schedule-state" class="meta" role="status"></span><button id="scan" class="primary">＋ 扫描生成</button></div></div>
   <div class="filter-bar" aria-label="筛选海报">
     <input id="event-search" type="search" placeholder="查找员工：姓名、工号、部门或 open_id" aria-label="查找员工或海报" aria-controls="review-people">
     <select id="scope" aria-label="审核周期"><option value="all">全部时间</option><option value="this">本周</option><option value="next">下周</option><option value="pending">待处理</option></select>
@@ -27,7 +27,7 @@
   </div>
   <section id="review-people" class="review-people" aria-label="员工检索结果" hidden></section>
   <div id="event-reports" class="reports" aria-live="polite"></div>
-  <div class="batch-bar"><b id="event-selected-count">已选 0 条</b><button id="confirm-all" disabled>批量确认排期</button><button id="regenerate-selected" disabled>重新生成</button><button id="skip-selected" disabled>跳过本次</button><button id="clear-events" disabled>清空选择</button><span class="spacer"></span><span id="evsum" class="meta">0 条记录</span></div>
+  <div class="batch-bar"><b id="event-selected-count">已选 0 条</b><button id="confirm-all" disabled>标记已核查</button><button id="regenerate-selected" disabled>重新生成</button><button id="skip-selected" disabled>跳过本次</button><button id="clear-events" disabled>清空选择</button><span class="spacer"></span><span id="evsum" class="meta">0 条记录</span></div>
   <p id="event-selection-help" class="selection-help">按住左侧选择栏上下拖动可连续勾选或取消；Shift + 点击可选择一段。</p>
   <div id="events"><div class="empty">正在加载海报…</div></div>
 </section>
@@ -74,6 +74,11 @@
   <div class="page-head"><div><h2>系统状态</h2><p>查看运行模式、飞书连接及任务状态。</p></div><span class="spacer"></span><button id="check-health">重新检查</button></div>
   <div class="bar" style="margin-bottom:18px"><label class="meta">管理口令 <input id="token" class="token" type="password" placeholder="未设可留空" autocomplete="off"></label><span class="meta">填写后刷新对应页面。</span></div>
   <div id="sys-reports" class="reports" aria-live="polite"></div>
+  <form id="delivery-config-form" class="feishu-settings"><h3>内网访问与推送</h3>
+    <label class="field">同事访问地址<input id="delivery-base-url" type="url" placeholder="http://192.168.1.20:8848" required></label>
+    <div class="bar"><label><input id="auto-schedule" type="checkbox" checked> 按日期自动生成并推送</label><button type="submit" class="primary">保存设置</button></div>
+    <p id="delivery-config-state" class="hint" role="status"></p><p class="hint">该地址也用于员工点击消息查看海报，需连接公司网络或 VPN。</p>
+  </form>
   <form id="feishu-config-form" class="feishu-settings">
     <h3>飞书连接</h3><p id="feishu-connection-state" class="hint" role="status">尚未检查</p>
     <fieldset id="feishu-config-fields"><div class="grid">
@@ -98,6 +103,7 @@
   <label class="field">姓名 *<input name="name" required maxlength="120"></label><label class="field">部门 *<input name="department" required maxlength="240"></label><label class="field">工号<input name="employee_no"></label><label class="field">入职日期<input name="join_date" type="date"></label><label class="field">生日（月日）<input name="birth_date" type="text" placeholder="09-11（仅月日）"></label><label class="field">在职状态<select name="active"><option value="1">在职</option><option value="0">离职</option></select></label>
   </div><section class="employee-binding" aria-labelledby="employee-binding-title"><h4 id="employee-binding-title">飞书用户对应</h4><label class="field">用户 ID（open_id）<input name="feishu_open_id" class="open-id-input" type="text" placeholder="ou_…" pattern="ou_[A-Za-z0-9_]+" spellcheck="false" autocomplete="off"></label></section><p id="employee-error" class="error" role="alert"></p><p id="employee-save-state" class="meta" role="status" hidden></p></div><div class="dialog-foot"><button type="button" data-close="employee-dialog">取消</button><button type="submit" id="employee-save" class="primary">保存资料</button></div></fieldset></form></dialog>
 <dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-head"><h3 id="confirm-title"></h3></div><div class="dialog-body"><p id="confirm-message" class="details-line"></p><ul id="confirm-items"></ul></div><div class="dialog-foot"><button id="confirm-cancel">取消</button><button id="confirm-accept" class="primary">确认</button></div></dialog>
+<dialog id="login-dialog" aria-labelledby="login-title"><form id="login-form"><div class="dialog-head"><h3 id="login-title">登录员工贺卡后台</h3></div><div class="dialog-body"><p class="hint">请输入公司后台管理员提供的管理口令。</p><label class="field">管理口令<input id="login-password" type="password" autocomplete="current-password" required></label><p id="login-error" class="error" role="alert"></p></div><div class="dialog-foot"><button id="login-cancel" type="button">取消</button><button id="login-submit" type="submit" class="primary">登录</button></div></form></dialog>
 <dialog id="zoom-dialog" aria-label="海报大图"><div class="bar" style="padding:10px 14px"><span class="meta">海报大图</span><span class="spacer"></span><button data-close="zoom-dialog">关闭</button></div><img id="zoom-img" alt="海报完整预览"></dialog>
 <div id="toast" role="status" hidden></div>
 <dialog id="background-dialog" aria-labelledby="background-title"><div class="dialog-head"><h3 id="background-title">更换底图</h3><span class="spacer"></span><button data-close="background-dialog">关闭</button></div>

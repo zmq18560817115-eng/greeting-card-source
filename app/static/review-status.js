@@ -10,11 +10,11 @@
   }
   function note(event){
     return event.exception_hint||({
-      generating:'正在生成海报，完成后可审核。',
+      generating:'正在生成海报，完成后自动排期，可抽查。',
       pushing:'正在发送，请等待结果，不要重复操作。',
       simulated:'演练完成，未向飞书发送消息。',
       skipped:'已跳过本次，不会自动推送。',
-      needs_regeneration:'资料已修改，请重新生成海报并审核。',
+      needs_regeneration:'资料已修改，系统将重新生成有效日期内的海报。',
       delivery_unknown:'发送结果尚未确认，员工可能已收到；请到飞书核实，暂勿重发。',
       gen_failed:'海报生成失败，请检查模板和底图。',
       blocked:'飞书对应异常，请查看原因并处理。',

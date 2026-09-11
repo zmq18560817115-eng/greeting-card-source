@@ -4,7 +4,7 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from . import pipeline, push
+from . import auto_schedule, delivery_config, pipeline, push
 from .settings import TZ, WEEKLY_CRON_DAY, WEEKLY_CRON_HOUR, WEEKLY_CRON_MINUTE
 
 log = logging.getLogger("scheduler")
@@ -12,6 +12,8 @@ _sched = None
 
 
 def weekly_job():
+    if not delivery_config.current()['auto_schedule']:
+        return
     log.info("=== 周期生成任务开始 ===")
     try:
         result = pipeline.run_weekly()
@@ -21,6 +23,12 @@ def weekly_job():
 
 
 def push_job():
+    if not delivery_config.current()['auto_schedule']:
+        return
+    try:
+        auto_schedule.prepare()
+    except Exception:
+        log.exception('自动日期扫描异常')
     for ev in push.due_events():
         log.info("到点推送 event=%s", ev["id"])
         try:

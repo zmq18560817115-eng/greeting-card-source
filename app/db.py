@@ -93,6 +93,17 @@ CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS poster_links (
+    token_hash TEXT PRIMARY KEY,
+    event_id INTEGER NOT NULL REFERENCES events(id),
+    card_id INTEGER NOT NULL,
+    delivery_uuid TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    open_id TEXT NOT NULL,
+    expires INTEGER NOT NULL,
+    UNIQUE(event_id, delivery_uuid)
+);
 """
 
 
@@ -134,7 +145,8 @@ def init_db():
                        "generation_token": "TEXT", "worker_pid": "INTEGER",
                        "delivery_started_at": "TEXT", "notice_message_id": "TEXT",
                        "notice_delivery_uuid": "TEXT", "notice_app_id": "TEXT",
-                       "notice_open_id": "TEXT", "notice_sent_at": "TEXT", "confirmed_app_id": "TEXT"},
+                       "notice_open_id": "TEXT", "notice_sent_at": "TEXT", "confirmed_app_id": "TEXT",
+                       "delivery_mode": "TEXT", "reviewed_at": "TEXT", "reviewed_by": "TEXT"},
             "cards": {"employee_snapshot": "TEXT"},
             "push_logs": {"recipient_snapshot": "TEXT"},
         }

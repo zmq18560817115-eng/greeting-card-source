@@ -403,3 +403,16 @@ def send_full_card(open_id, title, image_key, uuid):
         "elements": [{"tag": "img", "img_key": image_key, "mode": "fit_horizontal",
                       "preview": True, "alt": {"tag": "plain_text", "content": title}}],
     }, uuid)
+
+
+def send_greeting(open_id, name, title, banner_key, poster_url, uuid):
+    """One compact card. Text, banner and blank area all follow the same link."""
+    return _send_interactive(open_id, {
+        "config": {"wide_screen_mode": False, "enable_forward": False},
+        "card_link": {"url": poster_url},
+        "elements": [
+            {"tag": "div", "text": {"tag": "plain_text", "content": f"{name}，你有一张{title}，请查收！"}},
+            {"tag": "img", "img_key": banner_key, "mode": "fit_horizontal", "preview": False,
+             "alt": {"tag": "plain_text", "content": f"点击查看完整{title}"}},
+        ],
+    }, uuid)

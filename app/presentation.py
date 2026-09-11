@@ -80,7 +80,7 @@ def event_notice(event, emp):
     if status == "expired":
         return "已超过这次贺卡的发送日期，系统已停止推送。"
     if status == "needs_regeneration":
-        return "员工资料已修改，请重新生成海报并再次审核。"
+        return "员工资料已修改，系统将重新生成有效日期内的海报并校对排期。"
     if event.get("last_error"):
         return friendly_error(event["last_error"])
     if emp.get("identity_error"):

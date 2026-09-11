@@ -92,8 +92,8 @@ def _claim_generation(event_id, count, cfg):
         snapshot = employee_snapshot(emp)
         conn.execute("DELETE FROM cards WHERE event_id=?", (event_id,))
         conn.execute("""UPDATE events SET status='generating', generation_token=?,
-                     selected_card_id=NULL,confirmed_at=NULL,confirmed_by=NULL,employee_snapshot=NULL,
-                     delivery_uuid=NULL,delivery_started_at=NULL,last_error=NULL,years=?,worker_pid=?,updated_at=? WHERE id=?""",
+                     selected_card_id=NULL,confirmed_at=NULL,confirmed_by=NULL,employee_snapshot=NULL,reviewed_at=NULL,reviewed_by=NULL,
+                     delivery_uuid=NULL,delivery_mode=NULL,delivery_started_at=NULL,last_error=NULL,years=?,worker_pid=?,updated_at=? WHERE id=?""",
                      (token, event["years"], os.getpid(), now(), event_id))
         for idx in range(1, count + 1):
             conn.execute("""INSERT INTO cards(event_id,idx,mode,template_key,status,employee_snapshot,created_at)

@@ -146,7 +146,7 @@ def _invalidate_events(conn, employee_id, reason, deactivate=False):
                    (SELECT id FROM events WHERE {pending})""", (reason, employee_id))
     conn.execute(f"""UPDATE events SET
                    status=CASE WHEN ? OR status='skipped' THEN 'skipped' ELSE 'needs_regeneration' END,
-                   selected_card_id=NULL, confirmed_by=NULL, confirmed_at=NULL, generation_token=NULL,
+                   selected_card_id=NULL, confirmed_by=NULL, confirmed_at=NULL, generation_token=NULL,reviewed_at=NULL,reviewed_by=NULL,
                    last_error=?, updated_at=? WHERE {pending}""",
                  (int(deactivate), reason, db.now(), employee_id))
     return cancelled

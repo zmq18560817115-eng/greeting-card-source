@@ -54,6 +54,9 @@ HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8848"))
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 DRY_RUN = _b("DRY_RUN", "true")
+AUTO_SCHEDULE = _b("AUTO_SCHEDULE", "true")
+DELIVERY_MODE = "compact_link"
+POSTER_BASE_URL = os.environ.get("POSTER_BASE_URL", "").strip().rstrip("/")
 
 # 路径
 DATA_DIR = BASE_DIR / "data"

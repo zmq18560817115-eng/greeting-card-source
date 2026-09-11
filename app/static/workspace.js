@@ -8,7 +8,7 @@ const sameId = (a,b) => a != null && b != null && String(a) === String(b);
 const isActive = e => e?.active === true || e?.active === 1 || e?.active === '1';
 const openId = e => e?.feishu_open_id || e?.open_id || '';
 const birthdayText = value => StaffFilters.monthDay(value) || String(value ?? '');
-const STATUS = Object.freeze({generating:'生成中',ready:'待确认',confirmed:'已确认待推送',pushing:'推送中',pushed:'已推送',failed:'推送失败',gen_failed:'生成失败',skipped:'已跳过',blocked:'核验阻止',simulated:'演练完成',needs_regeneration:'资料变更，需重新生成',delivery_unknown:'发送回执不明',expired:'日期已过期，停止发送'});
+const STATUS = Object.freeze({generating:'生成中',ready:'待自动排期',confirmed:'已确认待推送',pushing:'推送中',pushed:'已推送',failed:'推送失败',gen_failed:'生成失败',skipped:'已跳过',blocked:'核验阻止',simulated:'演练完成',needs_regeneration:'资料变更，需重新生成',delivery_unknown:'发送回执不明',expired:'日期已过期，停止发送'});
 const DELIVERY = Object.freeze({sent:'已推送',not_sent:'未推送',sending:'推送中',unknown:'回执不明',simulated:'演练未发送'});
 const own = (object,key) => Object.prototype.hasOwnProperty.call(object,key);
 const labelFor = (map,key) => own(map,key) ? map[key] : String(key || '未知');
@@ -38,6 +38,10 @@ async function api(path, options={}){
   const headers=new Headers(options.headers||{});headers.set('X-Admin-Token',$('#token').value);
   if(options.body && !(options.body instanceof FormData))headers.set('Content-Type','application/json');
   const response=await fetch(path,{...options,headers,cache:'no-store'});const raw=await response.text();let data;
+  if(response.status===401&&!options.authRetried&&window.AdminLogin){
+    if(await window.AdminLogin.request())return api(path,{...options,authRetried:true});
+    throw new Error('请登录后继续操作');
+  }
   try{data=raw?JSON.parse(raw):{};}catch{throw new Error(`接口未返回 JSON（HTTP ${response.status}）：${raw.slice(0,500)}`);}
   if(!response.ok)throw new Error(message(data.detail ?? data.msg ?? data.error ?? `HTTP ${response.status}`));
   return data;
@@ -54,7 +58,7 @@ async function busy(key,area,work){
   try{return await work();}catch(error){report(area,'操作未完成',[error.message],true);toast(error.message);}finally{BUSY.delete(key);updateBusy();}
 }
 function updateBusy(){
-  for(const id of ['scan','confirm-all'])$('#'+id).disabled=BUSY.has('events') || (id==='confirm-all' && !EVENTS.some(e=>EVENT_SELECTED.has(String(e.id))&&canConfirm(e)));
+  for(const id of ['scan','confirm-all'])$('#'+id).disabled=BUSY.has('events') || (id==='confirm-all' && !EVENTS.some(e=>EVENT_SELECTED.has(String(e.id))&&canReview(e)));
   for(const id of ['add-employee','import-employees','download-template','sync-employees','kw','staff-filter','staff-department','staff-join-from','staff-join-to','staff-birth-from','staff-birth-to','staff-reset-filters'])$('#'+id).disabled=BUSY.has('staff');
   $('#employee-fields').disabled=BUSY.has('staff');
   $('#check-field-mapping').disabled=BUSY.has('fields')||BUSY.has('staff');
@@ -78,6 +82,7 @@ $('#confirm-dialog').addEventListener('cancel',e=>{e.preventDefault();finishConf
 document.addEventListener('click',e=>{const b=e.target.closest('[data-close]');if(b&&(!['staff-batch-dialog','background-dialog'].includes(b.dataset.close)||!BUSY.has(b.dataset.close==='background-dialog'?'tpl':'staff')))$('#'+b.dataset.close).close();});
 for(const id of ['staff-batch-dialog'])$('#'+id).addEventListener('cancel',e=>{if(BUSY.has('staff'))e.preventDefault();});
 try{$('#token').value=localStorage.getItem('gc_token')||'';}catch{/* The input also works when browser storage is unavailable. */}
+try{$('#token').value=sessionStorage.getItem('gc_session_token')||$('#token').value;}catch{}
 $('#token').oninput=()=>{try{localStorage.setItem('gc_token',$('#token').value);}catch{}};
 document.querySelectorAll('nav button').forEach(b=>b.onclick=async()=>{
   TAB=b.dataset.tab;for(const t of ['events','staff','tpl','sys'])$('#tab-'+t).hidden=t!==TAB;
@@ -108,6 +113,7 @@ function previewCard(e){
   return (e.cards||[]).find(c=>c.status==='ok'&&fileURL(c.url));
 }
 function canConfirm(e){return e.status==='ready'&&!terminal(e)&&!identityProblem(e.employee)&&Boolean(previewCard(e));}
+function canReview(e){return !e.reviewed_at&&Boolean(previewCard(e));}
 function canPush(e){return ['confirmed','failed'].includes(e.status)&&!terminal(e)&&!identityProblem(e.employee)&&Boolean(selectedCard(e));}
 function canRegen(e){return !terminal(e)&&['ready','confirmed','failed','gen_failed','blocked','needs_regeneration','simulated'].includes(e.status)&&isActive(e.employee);}
 function canSkip(e){return !terminal(e)&&['ready','confirmed','failed','gen_failed','blocked','needs_regeneration'].includes(e.status);}
@@ -118,14 +124,14 @@ function renderEventDetails(e){
   if(e.status==='delivery_unknown')instruction='发送请求已发出，但回执不明。请到飞书核实员工是否已收到消息；禁止重推和重新生成。';
   else if(e.status==='pushed'||e.pushed_at)instruction='已完成推送，不能再次确认、重新生成或重发。';
   else if(e.status==='expired')instruction='事件日期已过期，已停止发送，不能确认或推送。';
-  else if(e.status==='ready')instruction=reason||(preview?'请放大核对文案和收件人，再确认发送排期。':'当前海报不可用，请重新生成后审核。');
-  else if(e.status==='needs_regeneration')instruction='员工资料已变更，请重新生成海报后再次确认。';
+  else if(e.status==='ready')instruction=reason||(preview?'系统将自动校对收件人并按日期排期，无需逐条确认。':'当前海报不可用，请重新生成。');
+  else if(e.status==='needs_regeneration')instruction='员工资料已变更，系统将重新生成有效日期内的海报。';
   else if(e.status==='blocked')instruction=reason||'核验已更新，请重新生成后再审核。';
   else if(e.status==='simulated')instruction='演练完成，未向飞书发送消息。可重新生成后再次审核。';
   else if(e.status==='gen_failed')instruction='生成失败，可查看错误原因后重新生成。';
   else if(e.status==='generating')instruction='正在生成，页面将自动更新。';
   else if(['confirmed','failed'].includes(e.status))instruction=reason||(selectedCard(e)?'已确认收件人与海报，可立即推送。':'当前海报不可用，请重新生成并审核。');
-  const actions=terminal(e)?'':eventButton('confirm',e.id,'确认发送排期',canConfirm(e),true)+eventButton('push',e.id,e.status==='failed'?'重试推送':'立即推送',canPush(e))+eventButton('regenerate',e.id,'重新生成',canRegen(e))+eventButton('skip',e.id,'跳过本次',canSkip(e));
+  const actions=terminal(e)?'':eventButton('review',e.id,e.reviewed_at?'已核查':'标记已核查',canReview(e))+eventButton('push',e.id,e.status==='failed'?'重试推送':'立即推送',canPush(e))+eventButton('regenerate',e.id,'重新生成',canRegen(e))+eventButton('skip',e.id,'跳过本次',canSkip(e));
   return `<article class="event-review">
     <div class="review-heading"><strong>${esc(emp.name||'员工资料不可用')}</strong><span class="badge">${esc(e.event_type==='birthday'?'生日':e.event_type==='anniversary'?'入职周年':e.event_type)}</span>${badge(ReviewStatus.of(e),ReviewStatus.labels)}<span class="meta">${esc(e.event_date)}${e.years!=null?' · '+esc(e.years)+(e.event_type==='birthday'?' 岁':' 周年'):''}</span></div>
     <div class="review-layout"><div class="review-information">
@@ -173,14 +179,14 @@ function renderEvents(){
   $('#evsum').textContent=EVENTS.length+' 条记录';
   $('#events').innerHTML='<div class="table-wrap audit-table-wrap"><table class="data-table audit-table"><thead><tr><th class="check-col"><input type="checkbox" id="event-all" aria-label="选择当前筛选的全部海报"></th><th class="audit-person">姓名</th><th>工号</th><th>部门</th><th>入职日期</th><th>生日</th><th title="根据入职日期自动计算，截至本条贺卡日期已满的周年数，无需导入">入职周年数 ⓘ</th><th>飞书 open_id</th><th>贺卡 / 日期</th><th>推送状态</th><th>推送日期</th><th>异常提醒</th><th>海报</th><th>操作</th></tr></thead><tbody>'+EVENTS.map((e,i)=>{
     const card=previewCard(e),url=card&&fileURL(card.url),emp=e.employee||{};
-    return `<tr class="${EVENT_SELECTED.has(String(e.id))?'is-selected':''}"><td class="selection-cell"><input type="checkbox" aria-describedby="event-selection-help" data-event-check="${esc(e.id)}" aria-label="选择${esc(emp.name)}的海报" ${EVENT_SELECTED.has(String(e.id))?'checked':''}></td><td class="audit-person"><button class="person-link" data-action="detail" data-id="${esc(e.id)}">${esc(emp.name||'未知员工')}</button><small class="muted">员工 ID：${esc(emp.id??'—')}</small></td><td>${esc(emp.employee_no||'—')}</td><td>${esc(emp.department||'—')}</td><td>${esc(emp.join_date||'未填写')}</td><td>${esc(birthdayText(emp.birth_date_display||emp.birth_date)||'未填写')}</td><td title="截至 ${esc(e.event_date)}，由入职日期自动计算">${esc(anniversaryText(e.anniversary_years))}</td><td class="id-cell" title="${esc(openId(emp))}">${esc(openId(emp)||'未绑定')}</td><td class="audit-stacked"><span class="type-tag ${e.event_type==='birthday'?'birthday':'anniversary'}">${e.event_type==='birthday'?'生日':'入职周年'}</span><small class="muted">${esc(e.event_date)}</small></td><td>${badge(ReviewStatus.of(e),ReviewStatus.labels)}</td><td class="audit-stacked audit-push-dates">${pushDates(e)}</td><td class="audit-notice">${ReviewStatus.note(e)?`<button class="audit-notice-link" data-action="detail" data-id="${esc(e.id)}" title="${esc(ReviewStatus.note(e))}">${esc(ReviewStatus.note(e))}</button>`:'<span class="muted">—</span>'}</td><td class="audit-poster-cell">${url?`<button class="audit-poster-image" data-zoom="${esc(url)}" aria-label="放大${esc(emp.name)}的海报"><img src="${esc(url)}" alt="${esc(emp.name)}海报缩略图" loading="lazy"></button>`:'<span class="muted" aria-label="尚无可用海报">—</span>'}</td><td class="row-actions"><div class="bar">${eventButton('detail',e.id,'核查',true)}${canConfirm(e)?eventButton('confirm',e.id,'确认',true):canPush(e)?eventButton('push',e.id,'推送',true):''}</div></td></tr>`;
+    return `<tr class="${EVENT_SELECTED.has(String(e.id))?'is-selected':''}"><td class="selection-cell"><input type="checkbox" aria-describedby="event-selection-help" data-event-check="${esc(e.id)}" aria-label="选择${esc(emp.name)}的海报" ${EVENT_SELECTED.has(String(e.id))?'checked':''}></td><td class="audit-person"><button class="person-link" data-action="detail" data-id="${esc(e.id)}">${esc(emp.name||'未知员工')}</button><small class="muted">员工 ID：${esc(emp.id??'—')}</small></td><td>${esc(emp.employee_no||'—')}</td><td>${esc(emp.department||'—')}</td><td>${esc(emp.join_date||'未填写')}</td><td>${esc(birthdayText(emp.birth_date_display||emp.birth_date)||'未填写')}</td><td title="截至 ${esc(e.event_date)}，由入职日期自动计算">${esc(anniversaryText(e.anniversary_years))}</td><td class="id-cell" title="${esc(openId(emp))}">${esc(openId(emp)||'未绑定')}</td><td class="audit-stacked"><span class="type-tag ${e.event_type==='birthday'?'birthday':'anniversary'}">${e.event_type==='birthday'?'生日':'入职周年'}</span><small class="muted">${esc(e.event_date)}</small></td><td>${badge(ReviewStatus.of(e),ReviewStatus.labels)}</td><td class="audit-stacked audit-push-dates">${pushDates(e)}</td><td class="audit-notice">${ReviewStatus.note(e)?`<button class="audit-notice-link" data-action="detail" data-id="${esc(e.id)}" title="${esc(ReviewStatus.note(e))}">${esc(ReviewStatus.note(e))}</button>`:'<span class="muted">—</span>'}</td><td class="audit-poster-cell">${url?`<button class="audit-poster-image" data-zoom="${esc(url)}" aria-label="放大${esc(emp.name)}的海报"><img src="${esc(url)}" alt="${esc(emp.name)}海报缩略图" loading="lazy"></button>`:'<span class="muted" aria-label="尚无可用海报">—</span>'}</td><td class="row-actions"><div class="bar">${eventButton('detail',e.id,'核查',true)}${e.reviewed_at?'<span class="meta">已核查</span>':eventButton('review',e.id,'标记已核查',canReview(e))}</div></td></tr>`;
   }).join('')+(EVENTS.length?'':'<tr><td colspan="14" class="empty">当前筛选下暂无海报</td></tr>')+'</tbody></table></div>';
   RowSelection.refresh($('#events'));renderReviewPeople();updateEventSelection();
 }
 function updateEventSelection(){
   const chosen=EVENTS.filter(e=>EVENT_SELECTED.has(String(e.id)));
   $('#event-selected-count').textContent='已选 '+chosen.length+' 条';
-  for(const [id,predicate] of [['confirm-all',canConfirm],['regenerate-selected',canRegen],['skip-selected',canSkip]])$('#'+id).disabled=BUSY.has('events')||eventLoading||!chosen.some(predicate);
+  for(const [id,predicate] of [['confirm-all',canReview],['regenerate-selected',canRegen],['skip-selected',canSkip]])$('#'+id).disabled=BUSY.has('events')||eventLoading||!chosen.some(predicate);
   $('#clear-events').disabled=BUSY.has('events')||!chosen.length;
   const all=$('#event-all');if(all){all.checked=EVENTS.length>0&&chosen.length===EVENTS.length;all.indeterminate=chosen.length>0&&chosen.length<EVENTS.length;}
 }
@@ -256,11 +262,11 @@ async function ensureSelected(e){
   return freshEvent(e.id);
 }
 function batchEvents(action){return busy('events','event',async()=>{
-  const check={confirm:canConfirm,regenerate:canRegen,skip:canSkip}[action];
+  const check={confirm:canConfirm,review:canReview,regenerate:canRegen,skip:canSkip}[action];
   const chosen=EVENTS.filter(e=>EVENT_SELECTED.has(String(e.id))),list=chosen.filter(check);
   if(!list.length)throw new Error('所选记录没有可执行此操作的海报');
-  const label={confirm:'确认排期',regenerate:'重新生成',skip:'跳过'}[action];
-  if(!await askConfirm('批量'+label,'仅处理勾选且符合条件的记录。',list.map(recipient),action==='confirm'?'确认排期':'确认'+label))return;
+  const label={confirm:'确认排期',review:'核查',regenerate:'重新生成',skip:'跳过'}[action];
+  if(action!=='review'&&!await askConfirm('批量'+label,'仅处理勾选且符合条件的记录。',list.map(recipient),action==='confirm'?'确认排期':'确认'+label))return;
   let ok=0;const details=[];
   for(const item of list){try{
     const latest=await unchangedEvent(item,check);
@@ -287,10 +293,12 @@ async function eventAction(action,id){
       const base='/api/events/'+encodeURIComponent(id);
       if(action==='detail'){showEventDetail(cached);return;}
       if(action==='logs'){
-        if(EVENT_LOGS.has(String(id)))EVENT_LOGS.delete(String(id));else{const rows=await api(base+'/logs');if(!Array.isArray(rows))throw new Error('推送记录格式错误');EVENT_LOGS.set(String(id),rows.length?rows.map(r=>`${r.created_at||''}  第 ${r.attempt??''} 次  ${({notice_success:'简短通知已发送',success:'完整贺卡已发送',simulated:'演练完成',failed:'推送失败',delivery_unknown:'发送结果待确认',blocked:'已暂停推送'})[r.status]||r.status||''}\n操作人：${r.operator||'—'}  消息 ID：${r.message_id||'—'}\n${r.error||r.msg||''}`).join('\n\n'):'暂无推送记录');}showEventDetail(cached);return;
+        if(EVENT_LOGS.has(String(id)))EVENT_LOGS.delete(String(id));else{const rows=await api(base+'/logs');if(!Array.isArray(rows))throw new Error('推送记录格式错误');EVENT_LOGS.set(String(id),rows.length?rows.map(r=>`${r.created_at||''}  第 ${r.attempt??''} 次  ${({notice_success:'简短通知已发送',success:'贺卡消息已发送',simulated:'演练完成',failed:'推送失败',delivery_unknown:'发送结果待确认',blocked:'已暂停推送'})[r.status]||r.status||''}\n操作人：${r.operator||'—'}  消息 ID：${r.message_id||'—'}\n${r.error||r.msg||''}`).join('\n\n'):'暂无推送记录');}showEventDetail(cached);return;
       }
       const ev=await freshEvent(id);
-      if(action==='confirm'){
+      if(action==='review'){
+        requireOK(await post(base+'/review',{}));toast('已标记核查，不影响自动排期');
+      }else if(action==='confirm'){
         if(!canConfirm(ev))throw new Error('只有员工资料对应正常且海报可用的「待确认」事件可确认');
         if(reviewSnapshot(ev)!==reviewSnapshot(cached))throw new Error('资料或图片已变化，请刷新后重新审核');
         if(!await askConfirm('确认海报并排入发送','确认后将按计划自动推送，请核对收件人、海报和计划时间。',[recipient(ev),'计划时间：'+(ev.trigger_at||'未排期')],'确认发送排期'))return;
@@ -306,8 +314,8 @@ async function eventAction(action,id){
         report('event',after.status==='delivery_unknown'?'发送回执不明，请到飞书核实':after.status==='simulated'?'演练完成，未向飞书发送消息':after.status==='pushed'?'推送成功':'推送请求已处理',[recipient(ev),r.msg||labelFor(STATUS,after.status)],after.status==='delivery_unknown');
       }else if(action==='regenerate'){
         if(!canRegen(ev))throw new Error('当前状态或核验结果不允许重新生成');
-        if(!await askConfirm('重新生成海报','将按当前员工资料和已保存模板生成 1 张海报，之后需要重新审核确认。',[recipient(ev)],'生成 1 张'))return;
-        await unchangedEvent(ev,canRegen);requireOK(await post(base+'/regenerate',{count:1}));report('event','已提交重新生成',[recipient(ev),'生成完成后请重新查看并确认海报。']);
+        if(!await askConfirm('重新生成海报','将按当前员工资料和已保存模板生成 1 张海报，完成后系统会重新校对并按日期排期。',[recipient(ev)],'生成 1 张'))return;
+        await unchangedEvent(ev,canRegen);requireOK(await post(base+'/regenerate',{count:1}));report('event','已提交重新生成',[recipient(ev),'生成完成后自动排期，可抽查海报。']);
       }else if(action==='skip'){
         if(!canSkip(ev))throw new Error('当前状态不能跳过');if(!await askConfirm('跳过本次海报','本次事件将不再按原排期推送。',[recipient(ev)],'确认跳过'))return;
         await unchangedEvent(ev,canSkip);requireOK(await post(base+'/skip',{}));report('event','已跳过本次海报',[recipient(ev)]);
@@ -319,7 +327,7 @@ $('#event-detail').addEventListener('click',e=>{const b=e.target.closest('button
 $('#events').addEventListener('click',e=>{const b=e.target.closest('button[data-action]');if(b&&!b.disabled)eventAction(b.dataset.action,b.dataset.id);});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-zoom]');if(b){const url=fileURL(b.dataset.zoom);if(url){$('#zoom-img').src=url;$('#zoom-dialog').showModal();}}});
 $('#scope').onchange=()=>{if($('#scope').value==='pending'&&$('#event-status').value==='sent'){clearDeliveryFilter();$('#event-status').value='pending';}loadEvents();};
-$('#confirm-all').onclick=()=>batchEvents('confirm');
+$('#confirm-all').onclick=()=>batchEvents('review');
 $('#regenerate-selected').onclick=()=>batchEvents('regenerate');
 $('#skip-selected').onclick=()=>batchEvents('skip');
 $('#clear-events').onclick=()=>{EVENT_SELECTED.clear();renderEvents();};
@@ -500,14 +508,15 @@ $('#test-feishu-connection').onclick=()=>busy('feishu','sys',async()=>{
   finally{$('#feishu-config-fields').disabled=false;}
 });
 async function loadHealth(){
-  $('#run-mode').textContent='正在检查…';try{const h=await api('/api/health');$('#run-mode').textContent=h.dry_run===true?'当前为演练模式：完成后记录为「演练完成」，未向飞书发送消息。':h.dry_run===false?'当前为正式模式：按计划先发送简短通知，再自动发送完整贺卡，员工无需确认。立即推送需管理员确认。':'运行模式未知，请核对服务端配置。';$('#data-quality').textContent=h.missing_fields?`在职员工资料缺失：生日 ${h.missing_fields.birthday} 人，入职日期 ${h.missing_fields.join_date} 人，飞书 open_id ${h.missing_fields.feishu_id} 人。缺少对应日期的员工不会生成该类贺卡；缺少飞书 open_id 无法推送。`:'';$('#health').textContent=JSON.stringify(h,null,2);}catch(error){$('#run-mode').textContent='检查失败';$('#health').textContent=error.message;}
+  await loadDeliveryConfig();
+  $('#run-mode').textContent='正在检查…';try{const h=await api('/api/health');$('#run-mode').textContent=h.dry_run===true?'当前为演练模式：完成后记录为「演练完成」，未向飞书发送消息。':h.dry_run===false?'当前为正式模式：按日期推送文字加横版封面，点击整条消息查看完整海报；无需逐条确认。':'运行模式未知，请核对服务端配置。';$('#data-quality').textContent=h.missing_fields?`在职员工资料缺失：生日 ${h.missing_fields.birthday} 人，入职日期 ${h.missing_fields.join_date} 人，飞书 open_id ${h.missing_fields.feishu_id} 人。缺少对应日期的员工不会生成该类贺卡；缺少飞书 open_id 无法推送。`:'';$('#health').textContent=JSON.stringify(h,null,2);}catch(error){$('#run-mode').textContent='检查失败';$('#health').textContent=error.message;}
 }
 $('#check-health').onclick=loadHealth;
 setInterval(async()=>{
   if(TAB==='events'&&!document.hidden&&!BUSY.has('events')&&!eventLoading)await loadEvents(true);
   if(generationTask&&!pollingTask){pollingTask=true;try{const t=await api('/api/gen-task/'+encodeURIComponent(generationTask));if(['done','failed','error'].includes(t.status)){generationTask=null;report('event',t.status==='done'?'生成任务完成':'生成任务失败',[`新建 ${t.created??0} 个事件，成功生成 ${t.generated??0} / ${t.total??t.created??0} 个事件`,t.error||'请查看每条海报的实际状态。'],t.status!=='done'||Number(t.generated)<Number(t.total??t.created));}else{$('#events-loading').textContent=`生成中：${t.generated??0} / ${t.total??t.created??0} 个事件`;}}catch(error){generationTask=null;report('event','生成进度读取失败',[error.message,'生成可能仍在服务端进行，请刷新事件列表确认。'],true);}finally{pollingTask=false;}}
 },15000);
-window.addEventListener("DOMContentLoaded", ()=>loadEvents());
+window.addEventListener("DOMContentLoaded", ()=>{loadEvents();loadDeliveryConfig();});
 
 RowSelection.attach({container:$('#events'),selector:'[data-event-check]',allId:'event-all',idOf:input=>input.dataset.eventCheck,
   ids:()=>EVENTS.map(row=>String(row.id)),selected:()=>EVENT_SELECTED,locked:()=>BUSY.has('events'),
@@ -515,3 +524,21 @@ RowSelection.attach({container:$('#events'),selector:'[data-event-check]',allId:
 RowSelection.attach({container:$('#staff'),selector:'[data-employee-check]',allId:'staff-all',idOf:input=>input.dataset.employeeCheck,
   ids:()=>STAFF.map(row=>String(row.id)),selected:()=>STAFF_SELECTED,locked:()=>BUSY.has('staff'),
   change:values=>{STAFF_SELECTED=values;updateSelection();}});
+
+async function loadDeliveryConfig(){
+  try{
+    const cfg=await api('/api/delivery/config');
+    $('#delivery-base-url').value=cfg.base_url||'';$('#auto-schedule').checked=cfg.auto_schedule;
+    $('#auto-schedule-state').textContent=cfg.auto_schedule?'自动推送已开启':'自动推送已暂停';
+    $('#delivery-config-state').textContent=['127.0.0.1','localhost','::1'].includes(cfg.listen_host)
+      ? '当前仅监听本机。多人访问需在运行电脑配置内网监听并放行端口。'
+      : cfg.base_url ? '消息点击后打开此地址下的专属海报，有效期 30 天。' : '请填写同事可以访问的地址，图文通知才能正常打开海报。';
+  }catch(error){$('#delivery-config-state').textContent=error.message;}
+}
+$('#delivery-config-form').onsubmit=e=>{
+  e.preventDefault();if(!e.target.reportValidity())return;
+  busy('delivery','sys',async()=>{
+    requireOK(await post('/api/delivery/config',{base_url:$('#delivery-base-url').value,auto_schedule:$('#auto-schedule').checked}));
+    await loadDeliveryConfig();toast('内网地址与自动推送设置已保存');
+  });
+};

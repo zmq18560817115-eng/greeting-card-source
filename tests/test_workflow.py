@@ -33,6 +33,9 @@ class WorkflowTests(unittest.TestCase):
             patch.object(feishu, "send_notice", return_value="notice_test"),
             patch.object(feishu, "send_full_card", return_value="message_test"),
             patch.object(push, "DRY_RUN", False),
+            # Retain regression coverage for historical two-message deliveries.
+            patch.object(push, "DELIVERY_MODE", "notice_then_full_card"),
+            patch.object(scheduler.auto_schedule, "prepare", return_value={}),
             patch.object(push, "now", return_value="2026-09-10 12:00:00"),
         ]
         for p in self.patches:
@@ -336,7 +339,7 @@ class WorkflowTests(unittest.TestCase):
         with patch.object(main.feishu_config, "check_connection", return_value={'ok':False, 'msg':'缺少读取用户组权限'}):
             result = self.client.get('/api/health').json()
         self.assertEqual(result['missing_fields'], {'birthday':1, 'join_date':0, 'feishu_id':0})
-        self.assertEqual(result['delivery_flow'], 'notice_then_full_card')
+        self.assertEqual(result['delivery_flow'], 'compact_link')
         self.assertEqual(result['recipient_rule'], 'unique_exact_name_and_open_id')
         self.assertEqual(result['feishu'], {'ok':False, 'error':'缺少读取用户组权限'})
 

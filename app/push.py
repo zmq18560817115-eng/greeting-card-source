@@ -5,11 +5,11 @@ import os
 import uuid
 from pathlib import Path
 
-from . import employees, feishu
+from . import compact_delivery, employees, feishu
 from .db import execute, now, query, tx
 from .dates import match_employee, parse_date
 from .pipeline import employee_snapshot
-from .settings import DRY_RUN, MAX_PUSH_ATTEMPTS
+from .settings import DELIVERY_MODE, DRY_RUN, MAX_PUSH_ATTEMPTS
 
 log = logging.getLogger("push")
 CARD_TITLE = {"birthday": "生日贺卡", "anniversary": "入职周年贺卡"}
@@ -99,9 +99,13 @@ def push_event(event_id, operator="auto", force=False, with_text=True):
             return {"ok": False, "msg": str(exc), "status": "blocked"}
         attempt = event["push_attempts"] + 1
         delivery_uuid = event["delivery_uuid"] or uuid.uuid4().hex
-        conn.execute("""UPDATE events SET status='pushing',push_attempts=?,delivery_uuid=?,worker_pid=?,
+        mode = event.get('delivery_mode') or ('notice_then_full_card' if
+            event.get('notice_message_id') and event.get('notice_delivery_uuid') == delivery_uuid else DELIVERY_MODE)
+        conn.execute("""UPDATE events SET status='pushing',push_attempts=?,delivery_uuid=?,worker_pid=?,delivery_mode=?,
                       delivery_started_at=NULL,updated_at=? WHERE id=?""",
-                     (attempt, delivery_uuid, os.getpid(), now(), event_id))
+                     (attempt, delivery_uuid, os.getpid(), mode, now(), event_id))
+    if mode == 'compact_link':
+        return compact_delivery.deliver(event, emp, card, delivery_uuid, attempt, operator, dry_run=DRY_RUN, clock=now)
     image_key = message_id = None
     send_started = False
     evidence = None
@@ -207,7 +211,7 @@ def push_event(event_id, operator="auto", force=False, with_text=True):
 
 def due_events(limit=50):
     execute("""UPDATE events SET status='expired',last_error='事件日期已过期',updated_at=?
-               WHERE status IN ('confirmed','failed') AND event_date < ?""", (now(), now()[:10]))
+               WHERE status IN ('ready','confirmed','failed','gen_failed','needs_regeneration','blocked') AND event_date < ?""", (now(), now()[:10]))
     return query("""SELECT e.* FROM events e JOIN employees emp ON emp.id=e.employee_id
                  WHERE emp.active=1 AND e.trigger_at <= ? AND e.confirmed_at IS NOT NULL
                  AND (e.status='confirmed' OR (e.status='failed' AND e.push_attempts < ?))

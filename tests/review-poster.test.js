@@ -48,7 +48,9 @@ test('confirm automatically links the displayed poster even for legacy multiple 
   assert.equal(confirmed.selected_card_id,2);
   const html=app.renderEventDetails(record);
   assert.equal((html.match(/<img /g)||[]).length,1);
-  assert.match(html,/确认发送排期/);
+  assert.match(html,/标记已核查/);
+  assert.match(html,/无需逐条确认/);
+  assert.doesNotMatch(html,/data-action="confirm"/);
   assert.doesNotMatch(html,/方案|data-action="select"|请先选择/);
 });
 

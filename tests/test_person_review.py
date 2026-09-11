@@ -19,7 +19,7 @@ class PersonReviewTests(unittest.TestCase):
             key: {"ai": {"enabled": False}, "layers": []} for key in ("birthday", "anniversary")}}
         changes = [(db, "DB_PATH", self.root / "review.db"), (pipeline, "CARD_DIR", self.root / "cards"),
                    (main, "ADMIN_TOKEN", ""), (feishu, "FEISHU_APP_ID", "cli_person_test"),
-                   (push, "DRY_RUN", False), (pipeline, "_async_tasks", {})]
+                   (push, "DRY_RUN", False), (push, "DELIVERY_MODE", "notice_then_full_card"), (pipeline, "_async_tasks", {})]
         for target, attr, value in changes:
             handle = patch.object(target, attr, value)
             handle.start()

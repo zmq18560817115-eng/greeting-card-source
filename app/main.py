@@ -11,7 +11,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import access, bindings, compose, employees, feishu, feishu_config, field_report, fonts, pipeline, presentation, push, scheduler, staff_template, sync, templates
+from . import access, bindings, compose, delivery_config, employees, feishu, feishu_config, field_report, fonts, pipeline, poster_links, presentation, push, scheduler, staff_template, sync, templates
 from .dates import completed_years_since, match_employee, next_cycle, parse_birthday, parse_date, this_cycle
 from .db import init_db, now, query, query_one, tx
 from .settings import ADMIN_TOKEN, BASE_DIR, DRY_RUN, HOST, OUTPUT_DIR
@@ -42,9 +42,13 @@ async def protect_employee_files(request, call_next):
         return JSONResponse({"detail": "请先在后台填写管理口令，再查看海报"}, status_code=401,
                             headers={"Cache-Control": "private, no-store"})
     response = await call_next(request)
-    if is_file or path.startswith("/api/"):
+    if is_file or path.startswith(("/api/", "/greeting/")):
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
+    if path.startswith('/greeting/'):
+        response.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
+        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+        response.headers['X-Content-Type-Options'] = 'nosniff'
     # Successful API authentication grants a short-lived, file-only cookie so
     # normal <img> previews work without exposing the admin token in a URL.
     if path.startswith("/api/") and header_authorized and 200 <= response.status_code < 300:
@@ -67,6 +71,36 @@ def _startup():
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get('/greeting/{token}')
+def greeting(token: str):
+    if not poster_links.resolve(token):
+        return Response('贺卡链接已失效或不可用，请联系公司管理员。', status_code=410, media_type='text/plain')
+    return FileResponse(STATIC_DIR / 'greeting.html')
+
+
+@app.get('/greeting/{token}/poster')
+def greeting_poster(token: str):
+    path = poster_links.resolve(token)
+    if not path:
+        raise HTTPException(410, '贺卡链接已失效或不可用')
+    return FileResponse(path, media_type='image/png')
+
+
+@app.get('/api/delivery/config')
+def get_delivery_config(_=Depends(auth)):
+    return {**delivery_config.current(), 'listen_host': HOST, 'admin_configured': bool(ADMIN_TOKEN)}
+
+
+@app.post('/api/delivery/config')
+def save_delivery_config(payload: dict = Body(...), _=Depends(auth)):
+    return delivery_config.save(payload)
+
+
+@app.post('/api/auth/check')
+def check_admin(_=Depends(auth)):
+    return {'ok': True}
 
 
 def _event_view(ev):
@@ -131,6 +165,16 @@ def select_card(event_id: int, card_id: int = Body(..., embed=True), _=Depends(a
 @app.post("/api/events/{event_id}/confirm")
 def confirm(event_id: int, operator: str = Body("hr", embed=True), _=Depends(auth)):
     return push.confirm_event(event_id, operator)
+
+
+@app.post('/api/events/{event_id}/review')
+def mark_reviewed(event_id: int, _=Depends(auth)):
+    with tx() as conn:
+        row = conn.execute('SELECT id FROM events WHERE id=?', (event_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, '贺卡不存在')
+        conn.execute("UPDATE events SET reviewed_at=?,reviewed_by='hr' WHERE id=?", (now(), event_id))
+    return {'ok': True}
 
 
 @app.post("/api/events/{event_id}/skip")
@@ -403,7 +447,7 @@ def health(_=Depends(auth)):
             "event_stats": {r["status"]: r["c"] for r in query("SELECT status,COUNT(*) c FROM events GROUP BY status")},
             "jobs": scheduler.jobs(), "feishu": {"ok": feishu_ok, "error": feishu_err},
             "missing_fields": missing, "started_at": SERVICE_STARTED_AT,
-            "delivery_flow": "notice_then_full_card", "recipient_rule": "unique_exact_name_and_open_id"}
+            "delivery_flow": "compact_link", "auto_schedule": delivery_config.current()["auto_schedule"], "recipient_rule": "unique_exact_name_and_open_id"}
 
 
 @app.get("/api/feishu/fields")
