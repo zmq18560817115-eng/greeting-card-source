@@ -16,7 +16,7 @@
 <section id="tab-events">
   <div class="page-head"><div><h2>海报审核</h2><p>系统按生日月日、入职周年自动排期推送；可抽查海报或跳过本次，无需逐条确认。</p></div><div class="page-head-actions"><span id="auto-schedule-state" class="meta" role="status"></span><button id="scan" class="primary">＋ 扫描生成</button></div></div>
   <div class="filter-bar" aria-label="筛选海报">
-    <input id="event-search" type="search" placeholder="查找员工：姓名、工号、部门或 open_id" aria-label="查找员工或海报" aria-controls="review-people">
+    <input id="event-search" type="search" placeholder="查找员工：姓名、工号或部门" aria-label="查找员工或海报" aria-controls="review-people">
     <select id="scope" aria-label="审核周期"><option value="all">全部时间</option><option value="this">本周</option><option value="next">下周</option><option value="pending">待处理</option></select>
     <select id="event-type" aria-label="贺卡类型"><option value="">全部类型</option><option value="birthday">生日</option><option value="anniversary">入职周年</option></select>
     <select id="event-status" aria-label="推送状态"><option value="pending">待推送</option><option value="sent">已推送</option><option value="failed">推送失败</option></select>
@@ -32,7 +32,7 @@
   <div id="events"><div class="empty">正在加载海报…</div></div>
 </section>
 <section id="tab-staff" hidden>
-  <div class="page-head"><div><h2>员工资料</h2><p>维护基础资料；姓名与当前飞书应用的 open_id 一一对应，同名或对应异常时停止推送。</p></div><div class="page-head-actions"><button id="open-feishu-settings">飞书连接</button><button id="sync-employees">从飞书同步</button><button id="add-employee" class="primary">＋ 新增员工</button></div></div>
+  <div class="page-head"><div><h2>员工资料</h2><p>维护基础资料；系统从飞书通讯录自动核验收件人，同名或对应异常时停止推送。</p></div><div class="page-head-actions"><button id="open-feishu-settings">飞书连接</button><button id="sync-employees">从飞书同步</button><button id="add-employee" class="primary">＋ 新增员工</button></div></div>
   <details class="import-panel"><summary>导入员工名单 <span class="meta">· CSV / XLSX</span></summary><div class="import-content"><label class="field">选择名单文件<input type="file" id="csv" accept=".csv,.xlsx"></label><button id="download-template">下载导入模板</button><button id="import-employees" class="primary">开始导入</button><span class="meta">按行显示新增、更新和错误结果。</span></div></details>
   <details id="field-mapping" class="import-panel field-mapping"><summary>字段对应与检查 <span class="meta">· 查看来源和缺失原因</span></summary>
     <div class="bar"><p id="field-mapping-context" class="meta" role="status">展开后查看字段对应。</p><span class="spacer"></span><button id="check-field-mapping" type="button">检查飞书字段</button></div>
@@ -40,7 +40,7 @@
     <div id="field-mapping-table" class="table-wrap"></div><p id="field-mapping-message" class="hint" role="status"></p>
   </details>
   <div class="filter-bar" aria-label="筛选员工">
-    <input id="kw" type="search" placeholder="搜索姓名、工号、部门或用户 ID" aria-label="搜索员工">
+    <input id="kw" type="search" placeholder="搜索姓名、工号或部门" aria-label="搜索员工">
     <select id="staff-filter" aria-label="在职状态"><option value="active">在职员工</option><option value="all">全部员工</option><option value="inactive">已离职 / 停用</option></select>
     <select id="staff-department" aria-label="员工部门"><option value="">全部部门</option></select>
     <div class="staff-date-range" role="group" aria-label="入职日期区间"><span>入职日期</span><input id="staff-join-from" type="date" aria-label="入职开始日期"><span>至</span><input id="staff-join-to" type="date" aria-label="入职结束日期"></div>
@@ -86,7 +86,7 @@
       <label class="field">App Secret<input id="feishu-app-secret" type="password" placeholder="填写应用密钥" autocomplete="new-password"></label>
     </div><div class="bar" style="margin-top:14px"><button type="submit" class="primary">保存连接配置</button><button type="button" id="test-feishu-connection">检查通讯录连接</button><a href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer">创建 / 管理飞书应用 ↗</a></div></fieldset>
     <p class="hint">密钥只保存在本机，不回显。已保存时留空表示保留；保存后立即生效。连接检查读取通讯录，不发送消息。</p>
-    <details class="feishu-setup-help"><summary>还没有应用？查看接入步骤</summary><ol><li>用公司飞书账号登录开放平台，创建企业自建应用“员工贺卡助手”，添加机器人能力。</li><li>开通通讯录用户与部门读取权限，将通讯录权限范围覆盖需要导入的员工，发布版本并完成企业审核。</li><li>在“凭证与基础信息”复制 App ID 和 App Secret 到上方，保存后检查连接。</li></ol><p class="hint">连接成功后，在员工资料页同步名单，自动完成姓名与 ID 对应。open_id 随应用变化，请使用当前应用读取的 ID；生日、入职日期缺失时可从名单补全。</p></details>
+    <details class="feishu-setup-help"><summary>还没有应用？查看接入步骤</summary><ol><li>用公司飞书账号登录开放平台，创建企业自建应用“员工贺卡助手”，添加机器人能力。</li><li>开通通讯录用户与部门读取权限，将通讯录权限范围覆盖需要导入的员工，发布版本并完成企业审核。</li><li>在“凭证与基础信息”复制 App ID 和 App Secret 到上方，保存后检查连接。</li></ol><p class="hint">连接成功后，在员工资料页同步名单，系统自动完成收件人对应；生日、入职日期缺失时可从名单补全。</p></details>
   </form>
   <div class="panel"><p id="run-mode" class="hint">尚未检查</p><p id="data-quality" class="hint"></p><details><summary>运行详情</summary><pre id="health"></pre></details></div>
 </section>
@@ -94,14 +94,14 @@
 
 
 <dialog id="staff-batch-dialog" aria-labelledby="staff-batch-title"><form id="staff-batch-form"><div class="dialog-head"><h3 id="staff-batch-title">批量更正员工资料</h3><span class="spacer"></span><span id="staff-batch-count" class="meta"></span></div><fieldset id="staff-batch-fields"><div class="dialog-body">
-  <p class="hint">直接在表格里逐人更正，或统一填写部门等资料。用户 ID 请逐人填写或更换，不能统一填写或清空。仅保存修改过的内容；清空工号或日期会删除该项原值。</p>
+  <p class="hint">直接在表格里逐人更正，或统一填写部门等资料。飞书收件人由系统在后台自动对应。仅保存修改过的内容；清空工号或日期会删除该项原值。</p>
   <div class="batch-fill-bar"><label class="field">统一填写字段<select id="staff-batch-field"><option value="department">部门</option><option value="join_date">入职日期</option><option value="birth_date">生日（月日）</option><option value="active">在职状态</option></select></label><label class="field">统一填写内容<input id="staff-batch-value" aria-label="统一填写内容"><select id="staff-batch-active" aria-label="统一在职状态" hidden disabled><option value="1">在职</option><option value="0">离职</option></select></label><button type="button" id="staff-batch-apply">应用到选中员工</button><button type="button" id="staff-batch-reset">还原全部修改</button></div>
   <div id="staff-batch-table" class="table-wrap"></div><p id="staff-batch-error" class="error" role="alert"></p>
   <p class="hint batch-edit-note">资料变化后，受影响的待发送海报需重新生成并审核；已发送记录保留。</p>
   </div><div class="dialog-foot"><span id="staff-batch-dirty" class="meta" role="status">尚未修改</span><span class="spacer"></span><button type="button" data-close="staff-batch-dialog">取消</button><button type="submit" id="staff-batch-save" class="primary" disabled>保存更正</button></div></fieldset></form></dialog>
 <dialog id="employee-dialog" aria-labelledby="employee-title"><form id="employee-form"><div class="dialog-head"><h3 id="employee-title">员工资料</h3><span class="spacer"></span><button type="button" data-close="employee-dialog" aria-label="关闭员工资料窗口">关闭</button></div><fieldset id="employee-fields"><div class="dialog-body"><div class="grid">
   <label class="field">姓名 *<input name="name" required maxlength="120"></label><label class="field">部门 *<input name="department" required maxlength="240"></label><label class="field">工号<input name="employee_no"></label><label class="field">入职日期<input name="join_date" type="date"></label><label class="field">生日（月日）<input name="birth_date" type="text" placeholder="09-11（仅月日）"></label><label class="field">在职状态<select name="active"><option value="1">在职</option><option value="0">离职</option></select></label>
-  </div><section class="employee-binding" aria-labelledby="employee-binding-title"><h4 id="employee-binding-title">飞书用户对应</h4><label class="field">用户 ID（open_id）<input name="feishu_open_id" class="open-id-input" type="text" placeholder="ou_…" pattern="ou_[A-Za-z0-9_]+" spellcheck="false" autocomplete="off"></label></section><p id="employee-error" class="error" role="alert"></p><p id="employee-save-state" class="meta" role="status" hidden></p></div><div class="dialog-foot"><button type="button" data-close="employee-dialog">取消</button><button type="submit" id="employee-save" class="primary">保存资料</button></div></fieldset></form></dialog>
+  </div><p class="hint">保存后系统会按唯一姓名在飞书通讯录中自动对应收件人；同名、未找到或权限不足时不会推送。</p><p id="employee-error" class="error" role="alert"></p><p id="employee-save-state" class="meta" role="status" hidden></p></div><div class="dialog-foot"><button type="button" data-close="employee-dialog">取消</button><button type="submit" id="employee-save" class="primary">保存资料</button></div></fieldset></form></dialog>
 <dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-head"><h3 id="confirm-title"></h3></div><div class="dialog-body"><p id="confirm-message" class="details-line"></p><ul id="confirm-items"></ul></div><div class="dialog-foot"><button id="confirm-cancel">取消</button><button id="confirm-accept" class="primary">确认</button></div></dialog>
 <dialog id="login-dialog" aria-labelledby="login-title"><form id="login-form"><div class="dialog-head"><h3 id="login-title">登录员工贺卡后台</h3></div><div class="dialog-body"><p class="hint">请输入公司后台管理员提供的管理口令。</p><label class="field">管理口令<input id="login-password" type="password" autocomplete="current-password" required></label><p id="login-error" class="error" role="alert"></p></div><div class="dialog-foot"><button id="login-cancel" type="button">取消</button><button id="login-submit" type="submit" class="primary">登录</button></div></form></dialog>
 <dialog id="zoom-dialog" aria-label="海报大图"><div class="bar" style="padding:10px 14px"><span class="meta">海报大图</span><span class="spacer"></span><button data-close="zoom-dialog">关闭</button></div><img id="zoom-img" alt="海报完整预览"></dialog>

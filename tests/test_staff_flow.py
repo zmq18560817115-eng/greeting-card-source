@@ -37,7 +37,7 @@ class StaffFlowTests(unittest.TestCase):
     def row(self, eid):
         return db.query_one("SELECT * FROM employees WHERE id=?", (eid,))
 
-    def test_excel_download_is_blank_seven_columns_and_authenticated(self):
+    def test_excel_download_is_blank_hr_six_columns_and_authenticated(self):
         response = self.client.get("/api/employees/template.xlsx")
         self.assertEqual(response.status_code, 200)
         wb = openpyxl.load_workbook(io.BytesIO(response.content))
@@ -46,10 +46,8 @@ class StaffFlowTests(unittest.TestCase):
         self.assertIn("只填写月日", wb.active["E1"].comment.text)
         self.assertIn("完整入职年月日", wb.active["D1"].comment.text)
         self.assertEqual(wb.active.column_dimensions["E"].number_format, "@")
-        self.assertEqual(wb.active["G1"].value, "用户 ID（open_id）")
-        self.assertEqual(wb.active.column_dimensions["G"].number_format, "@")
-        self.assertIn("当前飞书应用", wb.active["G1"].comment.text)
-        self.assertEqual(wb.active.auto_filter.ref, "A1:G1")
+        self.assertEqual(wb.active.max_column, 6)
+        self.assertEqual(wb.active.auto_filter.ref, "A1:F1")
         self.assertEqual(wb.active.data_validations.dataValidation[0].formula1, '"在职,离职"')
         wb.close()
         with patch.object(main, "ADMIN_TOKEN", "test-secret"):
@@ -77,6 +75,9 @@ class StaffFlowTests(unittest.TestCase):
     def test_excel_open_id_roundtrip_updates_same_employee_and_preserves_blank_id(self):
         eid = self.employee(feishu_open_id="ou_test")
         wb = openpyxl.load_workbook(io.BytesIO(staff_template.build()))
+        # Legacy spreadsheets may still include this internal column.  HR's
+        # downloaded template does not include it.
+        wb.active.cell(1, 7, "用户 ID（open_id）")
         wb.active.append(["测试姓名甲", "更新部门", "001", "2021-02-01", "02-29", "在职", "ou_test"])
         wb.active.append(["测试姓名乙", "部门乙", "002", "2023-03-01", "12-01", "在职", "ou_other"])
         stream = io.BytesIO()
@@ -93,9 +94,9 @@ class StaffFlowTests(unittest.TestCase):
         self.assertTrue(self.client.post("/api/employees/import", files={"file": ("staff.csv", raw)}).json()["ok"])
         self.assertEqual(self.row(eid)["feishu_open_id"], "ou_test")
 
-    def test_user_id_csv_aliases_and_export_header(self):
+    def test_legacy_user_id_csv_aliases_remain_accepted_but_not_exported_to_hr(self):
         template = self.client.get("/api/employees/template.csv")
-        self.assertIn("用户 ID（open_id）", template.content.decode("utf-8-sig"))
+        self.assertNotIn("用户 ID（open_id）", template.content.decode("utf-8-sig"))
         for index, header in enumerate(("用户ID", "用户 ID", "用户 ID（open_id）", "open_id", "用户ID(open_id)")):
             raw = f"姓名,部门,{header}\n离线导入{index},测试部门,ou_{index}\n".encode("utf-8")
             result = self.client.post("/api/employees/import", files={"file": ("staff.csv", raw)}).json()

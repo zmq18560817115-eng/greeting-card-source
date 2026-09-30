@@ -1,5 +1,6 @@
 'use strict';
-const BATCH_COLUMNS={name:'姓名',department:'部门',employee_no:'工号',join_date:'入职日期',birth_date:'生日（月日）',active:'在职状态',feishu_open_id:'用户 ID（open_id）'};
+const BATCH_COLUMNS={name:'姓名',department:'部门',employee_no:'工号',join_date:'入职日期',birth_date:'生日（月日）',active:'在职状态'};
+const BATCH_SNAPSHOT_COLUMNS=[...Object.keys(BATCH_COLUMNS),'feishu_open_id'];
 let BATCH_ORIGINAL=[],BATCH_DRAFT=[];
 function batchChanges(){
   return BATCH_DRAFT.map((row,index)=>{
@@ -10,7 +11,9 @@ function batchChanges(){
       if(key==='birth_date'&&birthdayText(value)===birthdayText(before))continue;
       if(value!==before)changes[key]=value;
     }
-    return {id:original.id,original:Object.fromEntries(Object.keys(BATCH_COLUMNS).map(k=>[k,original[k]??null])),changes};
+    // The server uses the hidden open_id only to reject stale concurrent edits.
+    // HR never sees or changes it from this form.
+    return {id:original.id,original:Object.fromEntries(BATCH_SNAPSHOT_COLUMNS.map(k=>[k,original[k]??null])),changes};
   }).filter(item=>Object.keys(item.changes).length);
 }
 function updateBatchDirty(){
@@ -23,7 +26,6 @@ function renderBatchTable(){
   $('#staff-batch-table').innerHTML='<table class="data-table"><thead><tr><th>序号</th>'+Object.values(BATCH_COLUMNS).map(label=>`<th>${esc(label)}</th>`).join('')+'</tr></thead><tbody>'+BATCH_DRAFT.map((row,index)=>`<tr><td>${index+1}</td>`+Object.entries(BATCH_COLUMNS).map(([key,label])=>{
     const attr=`data-batch-index="${index}" data-batch-key="${key}" aria-label="第 ${index+1} 行${label}"`;
     if(key==='active')return `<td><select ${attr}><option value="1" ${Number(row.active)===1?'selected':''}>在职</option><option value="0" ${Number(row.active)===0?'selected':''}>离职</option></select></td>`;
-    if(key==='feishu_open_id')return `<td><input ${attr} class="open-id-input" type="text" value="${esc(row[key]??'')}" placeholder="ou_…" pattern="ou_[A-Za-z0-9_]+" spellcheck="false" autocomplete="off"></td>`;
     return `<td><input ${attr} type="${key==='join_date'?'date':'text'}" value="${esc(key==='birth_date'?birthdayText(row[key]):row[key]??'')}" ${key==='birth_date'?'placeholder="09-11（仅月日）"':''} ${['name','department'].includes(key)?'required':''}></td>`;
   }).join('')+'</tr>').join('')+'</tbody></table>';
   updateBatchDirty();
